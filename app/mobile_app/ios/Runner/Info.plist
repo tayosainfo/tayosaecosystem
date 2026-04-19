@@ -1,0 +1,33 @@
+﻿<?xml version=""1.0"" encoding=""UTF-8""?>
+<!DOCTYPE plist PUBLIC ""-//Apple//DTD PLIST 1.0//EN"" ""http://www.apple.com/DTDs/PropertyList-1.0.dtd"">
+<plist version=""1.0"">
+<dict>
+    <key>CFBundleName</key>
+    <string>TAYOSA</string>
+    <key>CFBundleIdentifier</key>
+    <string>ug.co.tayosa.app</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+
+    <!-- App Transport Security -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
+    </dict>
+
+    <!-- Biometrics -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>TAYOSA uses Face ID for secure authentication</string>
+
+    <!-- Camera (KYC) -->
+    <key>NSCameraUsageDescription</key>
+    <string>TAYOSA needs camera access for KYC document verification</string>
+
+    <!-- Location -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>TAYOSA uses location for community and agent features</string>
+</dict>
+</plist>
