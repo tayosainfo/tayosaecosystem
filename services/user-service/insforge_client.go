@@ -319,6 +319,28 @@ func insforgeAdminConfigured() bool {
 	return insforgeAdminAPIKey() != "" && insforgeBaseURL() != ""
 }
 
+// insforgeAdminPost calls an InsForge route with the admin/API key (server-side operations
+// like triggering verification emails that the anon key is not permitted to perform).
+func insforgeAdminPost(path string, q url.Values, body any) (map[string]any, int, error) {
+	key := insforgeAdminAPIKey()
+	base := insforgeBaseURL()
+	if key == "" || base == "" {
+		return nil, 0, errors.New("InsForge admin API key is not configured (set INSFORGE_ADMIN_API_KEY)")
+	}
+	raw, status, err := insforgeDoJSON(http.MethodPost, path, q, body, "user", key, nil)
+	if err != nil {
+		return nil, status, err
+	}
+	var out map[string]any
+	if len(raw) == 0 {
+		return map[string]any{}, status, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, status, err
+	}
+	return out, status, nil
+}
+
 // insforgeAdminGET calls an InsForge admin route (project admin API key or JWT).
 func insforgeAdminGET(pathWithQuery string) ([]byte, int, error) {
 	key := insforgeAdminAPIKey()

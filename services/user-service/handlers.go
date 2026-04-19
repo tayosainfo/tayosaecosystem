@@ -437,7 +437,18 @@ func resendVerificationHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if insforgeConfigured() {
-		out, _, err := insforgePostWithQuery("/api/auth/email/send-verification", clientTypeQuery(r), map[string]any{"email": target})
+		// send-verification is a server-side operation — use the admin/API key.
+		// The anon key does not have permission to trigger verification emails in InsForge.
+		var (
+			out map[string]any
+			err error
+		)
+		if insforgeAdminConfigured() {
+			out, _, err = insforgeAdminPost("/api/auth/email/send-verification", clientTypeQuery(r), map[string]any{"email": target})
+		} else {
+			// Fallback to anon key if no admin key is set (may still fail depending on InsForge project settings)
+			out, _, err = insforgePostWithQuery("/api/auth/email/send-verification", clientTypeQuery(r), map[string]any{"email": target})
+		}
 		if err != nil {
 			code := http.StatusBadGateway
 			var ifErr *InsforgeRequestError
@@ -446,7 +457,7 @@ func resendVerificationHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			payload := map[string]any{"error": err.Error()}
 			if code >= 500 || strings.Contains(strings.ToLower(err.Error()), "verification token") {
-				payload["hint"] = "InsForge rejected creating or emailing a verification token. In the InsForge project dashboard, configure outbound email (SMTP or your provider), confirm the project is active, and review auth / email verification settings. Tayosa only proxies this call."
+				payload["hint"] = "InsForge rejected creating or emailing a verification token. Ensure INSFORGE_ADMIN_API_KEY is set in your .env, outbound email (SMTP or your provider) is configured in the InsForge project dashboard, and the project is active."
 			}
 			respond(w, code, payload)
 			return
