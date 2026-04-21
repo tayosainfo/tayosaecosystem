@@ -161,8 +161,7 @@ func main() {
 		{path: "/api/v1/geo", base: userBase, public: true},
 		{path: "/api/v1/groups/policy", base: userBase, public: true},
 		// object storage
-		{path: "/api/v1/storage/upload-url", base: storageBase, public: false},
-		{path: "/api/v1/storage/object", base: storageBase, public: false},
+		{path: "/api/v1/storage/upload", base: storageBase, public: false},
 		// affiliate
 		{path: "/api/v1/affiliate/referrals", base: affiliateBase, public: false},
 		{path: "/api/v1/affiliate/rewards", base: affiliateBase, public: false},

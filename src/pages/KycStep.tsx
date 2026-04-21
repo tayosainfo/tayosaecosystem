@@ -50,35 +50,11 @@ const KycStep: React.FC = () => {
     if (!token) {
       throw new Error('Session expired. Please sign in again.');
     }
-    const strategy = await platformApi.getUploadStrategy(token, {
-      fileName: file.name,
-      category: 'kyc',
-      contentType: file.type || 'application/octet-stream',
-      size: file.size,
-    });
-    if (!strategy.uploadUrl) {
-      throw new Error('Upload URL not returned by storage service');
+    const result = await platformApi.uploadFile(token, file, 'kyc');
+    if (!result.key) {
+      throw new Error('Upload completed but storage key was missing');
     }
-    const method = String(strategy.method || 'POST').toUpperCase();
-    if (method === 'POST' && strategy.fields) {
-      const form = new FormData();
-      Object.entries(strategy.fields).forEach(([k, v]) => form.append(k, v));
-      form.append('file', file);
-      const up = await fetch(strategy.uploadUrl, { method: 'POST', body: form });
-      if (!up.ok) {
-        throw new Error('File upload failed');
-      }
-    } else {
-      const up = await fetch(strategy.uploadUrl, {
-        method: method === 'PUT' ? 'PUT' : 'POST',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
-      });
-      if (!up.ok) {
-        throw new Error('File upload failed');
-      }
-    }
-    return String(strategy.key || '');
+    return result.key;
   };
 
   const onUpload = async (

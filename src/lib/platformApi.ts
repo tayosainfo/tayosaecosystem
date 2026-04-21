@@ -22,12 +22,6 @@ export type MePayload = {
   featureAccess?: { canTransact?: boolean; canJoinKibiina?: boolean };
 };
 
-export type UploadStrategyPayload = {
-  method?: string;
-  uploadUrl?: string;
-  fields?: Record<string, string>;
-  key?: string;
-};
 
 /** Thrown on non-2xx API responses; includes parsed JSON for flags like requireEmailVerification. */
 export class PlatformApiError extends Error {
@@ -238,16 +232,33 @@ export const platformApi = {
       body: JSON.stringify(value),
     }, false),
 
-  getUploadStrategy: (token: string, payload: { fileName: string; category?: string; contentType?: string; size?: number }) => {
-    const q = new URLSearchParams({
-      fileName: payload.fileName,
-      category: payload.category || 'kyc',
-      ...(payload.contentType ? { contentType: payload.contentType } : {}),
-      ...(payload.size ? { size: String(payload.size) } : {}),
-    }).toString();
-    return request<UploadStrategyPayload>(`/api/v1/storage/upload-url?${q}`, {
-      method: 'GET',
+  /**
+   * Upload a file to the object-storage-service, which proxies the bytes
+   * directly to InsForge storage. Returns the storage key for use in KYC
+   * and other document references.
+   *
+   * NOTE: Do NOT pass Content-Type in the headers — the browser must set it
+   * automatically so the multipart boundary is included.
+   */
+  uploadFile: async (token: string, file: File, category = 'kyc'): Promise<{ key: string }> => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('category', category);
+    const response = await fetch(`${API_BASE_URL}/api/v1/storage/upload`, {
+      method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
-    }, false);
+      body: form,
+    });
+    let payload: unknown = {};
+    try { payload = await response.json(); } catch { payload = {}; }
+    if (!response.ok) {
+      const rec = isRecord(payload) ? payload : {};
+      throw new PlatformApiError(
+        String(rec.error ?? 'File upload failed'),
+        response.status,
+        rec as Record<string, unknown>,
+      );
+    }
+    return payload as { key: string };
   },
 };
