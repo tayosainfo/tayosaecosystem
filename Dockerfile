@@ -20,13 +20,20 @@ COPY --from=builder /app/gateway .
 COPY --from=builder /app/user-server .
 COPY --from=builder /app/object-server .
 
-# Start script: runs user-service on 8081, object-storage on 8015, gateway on Render's PORT
+# Start script: runs user-service on 8081, object-storage on 8015, gateway on Render's $PORT
 COPY <<'EOF' /app/start.sh
 #!/bin/sh
+# Render injects $PORT dynamically — use it for the gateway.
+# Fall back to 8080 for local docker runs.
+GATEWAY_PORT="${PORT:-8080}"
+
 PORT=8081 ./user-server &
 PORT=8015 ./object-server &
 sleep 2
-PORT=10000 USER_SERVICE_URL=http://localhost:8081 OBJECT_STORAGE_SERVICE_URL=http://localhost:8015 exec ./gateway
+PORT=${GATEWAY_PORT} \
+  USER_SERVICE_URL=http://localhost:8081 \
+  OBJECT_STORAGE_SERVICE_URL=http://localhost:8015 \
+  exec ./gateway
 EOF
 
 RUN chmod +x /app/start.sh
