@@ -17,6 +17,15 @@ type MemoryStore struct {
 	usersByAuthMail map[string]User
 	usersByID       map[string]User
 	onboarding      map[string]OnboardingProfile
+	consents        map[string]UserConsents
+	kycProfiles     map[string]KYCProfile
+	kycDocuments    map[string][]KYCDocument
+	saccoMembership map[string]SaccoMembership
+	kibiinaPrefs    map[string]KibiinaPreference
+	sharesUnits     map[string]int
+	refCodesByUser  map[string]string
+	userByRefCode   map[string]string
+	adminSettings   map[string]map[string]any
 	geoRows         []geoRow
 }
 
@@ -27,6 +36,15 @@ func NewMemoryStore() *MemoryStore {
 		usersByAuthMail: map[string]User{},
 		usersByID:       map[string]User{},
 		onboarding:      map[string]OnboardingProfile{},
+		consents:        map[string]UserConsents{},
+		kycProfiles:     map[string]KYCProfile{},
+		kycDocuments:    map[string][]KYCDocument{},
+		saccoMembership: map[string]SaccoMembership{},
+		kibiinaPrefs:    map[string]KibiinaPreference{},
+		sharesUnits:     map[string]int{},
+		refCodesByUser:  map[string]string{},
+		userByRefCode:   map[string]string{},
+		adminSettings:   map[string]map[string]any{"fees": {"registrationFeeUGX": 0, "saccoEntranceFeeUGX": 0, "transactionFeePct": 0}},
 	}
 }
 
@@ -140,6 +158,204 @@ func (m *MemoryStore) GeoRecordExists(district, county, subCounty, parish, villa
 
 func (m *MemoryStore) GroupPolicyStats() (GroupPolicyStats, error) {
 	return GroupPolicyStats{}, nil
+}
+
+func (m *MemoryStore) UpsertUserConsents(c UserConsents) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c.LastUpdatedAt = time.Now()
+	m.consents[c.UserID] = c
+	return nil
+}
+
+func (m *MemoryStore) GetUserConsents(userID string) (UserConsents, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.consents[userID]
+	return v, ok
+}
+
+func (m *MemoryStore) UpsertKYCProfile(k KYCProfile) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k.LastUpdatedAt = time.Now()
+	m.kycProfiles[k.UserID] = k
+	return nil
+}
+
+func (m *MemoryStore) GetKYCProfile(userID string) (KYCProfile, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.kycProfiles[userID]
+	return v, ok
+}
+
+func (m *MemoryStore) ReplaceKYCDocuments(userID string, docs []KYCDocument) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	cloned := make([]KYCDocument, 0, len(docs))
+	for _, d := range docs {
+		if d.CreatedAt.IsZero() {
+			d.CreatedAt = now
+		}
+		cloned = append(cloned, d)
+	}
+	m.kycDocuments[userID] = cloned
+	return nil
+}
+
+func (m *MemoryStore) GetKYCDocuments(userID string) ([]KYCDocument, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	src := m.kycDocuments[userID]
+	out := make([]KYCDocument, len(src))
+	copy(out, src)
+	return out, nil
+}
+
+func (m *MemoryStore) SetKYCDecision(userID, status, reviewedBy, reviewNote string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := m.kycProfiles[userID]
+	now := time.Now()
+	k.UserID = userID
+	k.Status = status
+	k.ReviewedBy = reviewedBy
+	k.ReviewNote = reviewNote
+	k.ReviewedAt = &now
+	k.LastUpdatedAt = now
+	m.kycProfiles[userID] = k
+	return nil
+}
+
+func (m *MemoryStore) UpsertSaccoMembership(s SaccoMembership) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s.LastUpdatedAt = time.Now()
+	m.saccoMembership[s.UserID] = s
+	return nil
+}
+
+func (m *MemoryStore) GetSaccoMembership(userID string) (SaccoMembership, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.saccoMembership[userID]
+	return v, ok
+}
+
+func (m *MemoryStore) EnsureSharesLedger(userID string, sharesUnits int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if sharesUnits <= 0 {
+		sharesUnits = 1
+	}
+	if cur, ok := m.sharesUnits[userID]; !ok || cur < sharesUnits {
+		m.sharesUnits[userID] = sharesUnits
+	}
+	return nil
+}
+
+func (m *MemoryStore) GetSharesUnits(userID string) (int, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.sharesUnits[userID]
+	return v, ok, nil
+}
+
+func (m *MemoryStore) UpsertKibiinaPreference(k KibiinaPreference) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k.LastUpdatedAt = time.Now()
+	m.kibiinaPrefs[k.UserID] = k
+	return nil
+}
+
+func (m *MemoryStore) GetKibiinaPreference(userID string) (KibiinaPreference, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.kibiinaPrefs[userID]
+	return v, ok
+}
+
+func (m *MemoryStore) SetUserReferralCode(userID, referralCode string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refCodesByUser[userID] = referralCode
+	m.userByRefCode[referralCode] = userID
+	return nil
+}
+
+func (m *MemoryStore) GetUserReferralCode(userID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.refCodesByUser[userID]
+	return v, ok
+}
+
+func (m *MemoryStore) FindUserIDByReferralCode(referralCode string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.userByRefCode[referralCode]
+	return v, ok
+}
+
+func (m *MemoryStore) ListAdminKYCQueue(status string, limit int) ([]AdminKYCQueueItem, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 {
+		limit = 50
+	}
+	var out []AdminKYCQueueItem
+	for _, u := range m.usersByID {
+		k := m.kycProfiles[u.ID]
+		st := k.Status
+		if st == "" {
+			st = "not_started"
+		}
+		if status != "" && status != "all" && st != status {
+			continue
+		}
+		out = append(out, AdminKYCQueueItem{
+			UserID:       u.ID,
+			FullName:     u.FullName,
+			PhoneE164:    u.PhoneE164,
+			ContactEmail: u.ContactEmail,
+			Status:       st,
+			IDType:       k.IDType,
+			IDNumber:     k.IDNumber,
+			SubmittedAt:  k.SubmittedAt,
+			ReviewedAt:   k.ReviewedAt,
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (m *MemoryStore) GetAdminSetting(key string) (map[string]any, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.adminSettings[key]
+	if !ok {
+		return nil, false, nil
+	}
+	out := map[string]any{}
+	for k, val := range v {
+		out[k] = val
+	}
+	return out, true, nil
+}
+
+func (m *MemoryStore) SetAdminSetting(key string, value map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if value == nil {
+		value = map[string]any{}
+	}
+	m.adminSettings[key] = value
+	return nil
 }
 
 func (m *MemoryStore) EnsureGeoSeeded() error {

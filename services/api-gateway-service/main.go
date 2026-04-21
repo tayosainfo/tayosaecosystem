@@ -35,7 +35,7 @@ func envOr(key, fallback string) string {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Request-Id, X-CSRF-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Request-Id, X-CSRF-Token, X-Admin-Secret")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -76,6 +76,9 @@ func forward(w http.ResponseWriter, r *http.Request, targetBase string) {
 	}
 	if rid := r.Header.Get("X-Request-Id"); rid != "" {
 		req.Header.Set("X-Request-Id", rid)
+	}
+	if as := r.Header.Get("X-Admin-Secret"); as != "" {
+		req.Header.Set("X-Admin-Secret", as)
 	}
 	resp, err := proxyHTTP.Do(req)
 	if err != nil {
@@ -150,6 +153,11 @@ func main() {
 		{path: "/api/v1/auth/profile", base: userBase, public: false},
 		{path: "/api/v1/users/me", base: userBase, public: false},
 		{path: "/api/v1/onboarding/phase", base: userBase, public: false},
+		{path: "/api/v1/onboarding/kyc", base: userBase, public: false},
+		{path: "/api/v1/onboarding/sacco", base: userBase, public: false},
+		{path: "/api/v1/onboarding/kibiina", base: userBase, public: false},
+		{path: "/api/v1/admin/kyc", base: userBase, public: false},
+		{path: "/api/v1/admin/settings", base: userBase, public: false},
 		{path: "/api/v1/geo", base: userBase, public: true},
 		{path: "/api/v1/groups/policy", base: userBase, public: true},
 		// object storage
@@ -190,6 +198,13 @@ func main() {
 			if !rt.public && !hasBearer(r) {
 				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing bearer token"})
 				return
+			}
+			if rt.path == "/api/v1/admin/kyc" || rt.path == "/api/v1/admin/settings" {
+				adminSecret := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
+				if adminSecret == "" || strings.TrimSpace(r.Header.Get("X-Admin-Secret")) != adminSecret {
+					writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "admin authentication failed"})
+					return
+				}
 			}
 			forward(w, r, rt.base)
 		})

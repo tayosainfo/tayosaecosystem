@@ -12,6 +12,23 @@ export type RegisterPendingResponse = {
   message?: string;
 };
 
+export type MePayload = {
+  user: SessionLoginPayload['user'] & { contactEmailVerified?: boolean };
+  kyc?: { status?: string; submittedAt?: string; reviewedAt?: string };
+  sacco?: { status?: string; parish?: string };
+  kibiina?: { action?: string };
+  shares?: { balanceUnits?: number };
+  referralCode?: string;
+  featureAccess?: { canTransact?: boolean; canJoinKibiina?: boolean };
+};
+
+export type UploadStrategyPayload = {
+  method?: string;
+  uploadUrl?: string;
+  fields?: Record<string, string>;
+  key?: string;
+};
+
 /** Thrown on non-2xx API responses; includes parsed JSON for flags like requireEmailVerification. */
 export class PlatformApiError extends Error {
   readonly status: number;
@@ -41,8 +58,19 @@ function withAuthClientType(path: string): string {
   return path + (path.includes('?') ? '&' : '?') + 'client_type=web';
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const urlPath = withAuthClientType(path);
+function withoutClientType(path: string): string {
+  if (!path.includes('client_type=')) {
+    return path;
+  }
+  const [base, query = ''] = path.split('?');
+  const params = new URLSearchParams(query);
+  params.delete('client_type');
+  const next = params.toString();
+  return next ? `${base}?${next}` : base;
+}
+
+async function request<T>(path: string, init?: RequestInit, attachWebClientType = true): Promise<T> {
+  const urlPath = attachWebClientType ? withAuthClientType(path) : path;
   const response = await fetch(`${API_BASE_URL}${urlPath}`, {
     headers: {
       'Content-Type': 'application/json',
@@ -74,6 +102,11 @@ export const platformApi = {
     password: string;
     dateOfBirth?: string;
     nationality?: string;
+    referralCode?: string;
+    termsAccepted: boolean;
+    privacyAccepted: boolean;
+    termsVersion?: string;
+    privacyVersion?: string;
   }) =>
     request<SessionLoginPayload | RegisterPendingResponse>('/api/v1/auth/register', {
       method: 'POST',
@@ -84,6 +117,17 @@ export const platformApi = {
     request<SessionLoginPayload>('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }).catch(async (err: unknown) => {
+      // Some local auth deployments reject client_type=web.
+      // Retry once without the query param so login remains compatible.
+      if (!(err instanceof PlatformApiError) || err.status !== 401) {
+        throw err;
+      }
+      const fallbackPath = withoutClientType(withAuthClientType('/api/v1/auth/login'));
+      return await request<SessionLoginPayload>(fallbackPath, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }, false);
     }),
 
   resendVerificationEmail: (payload: { email: string }) =>
@@ -140,4 +184,70 @@ export const platformApi = {
       headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     }),
+
+  getMe: (token: string) =>
+    request<MePayload>('/api/v1/users/me', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+
+  submitKYC: (token: string, payload: Record<string, unknown>) =>
+    request('/api/v1/onboarding/kyc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    }),
+
+  submitSacco: (token: string, payload: Record<string, unknown>) =>
+    request('/api/v1/onboarding/sacco', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    }),
+
+  submitKibiina: (token: string, payload: Record<string, unknown>) =>
+    request('/api/v1/onboarding/kibiina', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    }),
+
+  adminListKyc: (token: string, adminSecret: string, status = 'pending') =>
+    request<{ items: any[]; count: number }>(`/api/v1/admin/kyc?status=${encodeURIComponent(status)}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, 'X-Admin-Secret': adminSecret },
+    }, false),
+
+  adminDecideKyc: (token: string, adminSecret: string, userId: string, decision: 'approved' | 'rejected', reviewNote?: string) =>
+    request(`/api/v1/admin/kyc?userId=${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'X-Admin-Secret': adminSecret },
+      body: JSON.stringify({ status: decision, reviewNote: reviewNote || '', reviewedBy: 'admin_panel' }),
+    }, false),
+
+  adminGetFees: (token: string, adminSecret: string) =>
+    request<{ key: string; value: Record<string, unknown> }>('/api/v1/admin/settings?key=fees', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, 'X-Admin-Secret': adminSecret },
+    }, false),
+
+  adminSetFees: (token: string, adminSecret: string, value: Record<string, unknown>) =>
+    request('/api/v1/admin/settings?key=fees', {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'X-Admin-Secret': adminSecret },
+      body: JSON.stringify(value),
+    }, false),
+
+  getUploadStrategy: (token: string, payload: { fileName: string; category?: string; contentType?: string; size?: number }) => {
+    const q = new URLSearchParams({
+      fileName: payload.fileName,
+      category: payload.category || 'kyc',
+      ...(payload.contentType ? { contentType: payload.contentType } : {}),
+      ...(payload.size ? { size: String(payload.size) } : {}),
+    }).toString();
+    return request<UploadStrategyPayload>(`/api/v1/storage/upload-url?${q}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    }, false);
+  },
 };

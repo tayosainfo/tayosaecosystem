@@ -13,7 +13,7 @@ import (
 func allowCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Request-Id, X-CSRF-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Request-Id, X-CSRF-Token, X-Admin-Secret")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -23,27 +23,67 @@ func allowCORS(next http.Handler) http.Handler {
 	})
 }
 
+func loadDotEnv() {
+	wd, err := os.Getwd()
+	if err != nil {
+		_ = godotenv.Overload(".env")
+		return
+	}
+	var paths []string
+	for d := wd; ; d = filepath.Dir(d) {
+		p := filepath.Join(d, ".env")
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			paths = append(paths, p)
+		}
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	if len(paths) == 0 {
+		_ = godotenv.Overload(".env")
+		return
+	}
+	// Furthest ancestor first, then toward cwd — Overload so more specific .env wins.
+	for i := len(paths) - 1; i >= 0; i-- {
+		if err := godotenv.Overload(paths[i]); err != nil {
+			log.Printf("user-service: loading %s: %v", paths[i], err)
+		} else {
+			log.Printf("user-service: loaded env file %s", paths[i])
+		}
+	}
+}
+
 func main() {
-	// Repo root .env, then optional local override (services/user-service/.env).
-	_ = godotenv.Load(filepath.Join("..", "..", ".env"))
-	_ = godotenv.Load(".env")
+	loadDotEnv()
 
 	initStore()
 	defer activeStore.Close()
 
 	if insforgeConfigured() {
 		log.Printf("user-service: InsForge auth enabled (%s)", insforgeBaseURL())
+		if insforgeAdminConfigured() {
+			log.Print("user-service: INSFORGE_ADMIN_API_KEY is set (send-verification will use anon Bearer + x-api-key)")
+		} else {
+			log.Print("user-service: INSFORGE_ADMIN_API_KEY not set — send-verification may fail; set project API key (ik_...) in .env")
+		}
 	} else {
 		log.Print("user-service: InsForge auth disabled (set INSFORGE_BASE_URL and INSFORGE_ANON_KEY for live codes)")
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		respond(w, http.StatusOK, map[string]any{
+		payload := map[string]any{
 			"status":  "active",
 			"service": "user-service",
 			"time":    time.Now().Format(time.RFC3339),
-		})
+		}
+		if insforgeConfigured() {
+			payload["insforge"] = map[string]any{
+				"baseUrl":        insforgeBaseURL(),
+				"adminKeyLoaded": insforgeAdminConfigured(),
+			}
+		}
+		respond(w, http.StatusOK, payload)
 	})
 	mux.HandleFunc("/health/ready", func(w http.ResponseWriter, r *http.Request) {
 		if err := activeStore.Ping(); err != nil {
@@ -71,6 +111,11 @@ func main() {
 	mux.HandleFunc("PATCH /api/v1/auth/profile", requireAuth(profilePatchHandler))
 	mux.HandleFunc("/api/v1/users/me", requireAuth(meHandler))
 	mux.HandleFunc("/api/v1/onboarding/phase", requireAuth(onboardingHandler))
+	mux.HandleFunc("POST /api/v1/onboarding/kyc", requireAuth(onboardingKYCHandler))
+	mux.HandleFunc("POST /api/v1/onboarding/sacco", requireAuth(onboardingSaccoHandler))
+	mux.HandleFunc("POST /api/v1/onboarding/kibiina", requireAuth(onboardingKibiinaHandler))
+	mux.HandleFunc("/api/v1/admin/kyc", adminKYCDecisionHandler)
+	mux.HandleFunc("/api/v1/admin/settings", adminSettingsHandler)
 	mux.HandleFunc("/api/v1/geo", geoLookupHandler)
 	mux.HandleFunc("/api/v1/groups/policy", parishGroupPolicyHandler)
 

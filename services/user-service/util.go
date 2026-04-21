@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -101,6 +103,11 @@ func firstNonEmpty(ss ...string) string {
 		}
 	}
 	return ""
+}
+
+func referralCodeForUserID(userID string) string {
+	sum := sha1.Sum([]byte("tayosa:" + strings.TrimSpace(userID)))
+	return "TAY-" + strings.ToUpper(hex.EncodeToString(sum[:]))[:8]
 }
 
 // extractInsForgeSignupUserID reads user id from varied InsForge POST /api/auth/users response shapes.

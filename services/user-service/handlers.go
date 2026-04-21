@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -92,6 +94,11 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		Password    string `json:"password"`
 		DateOfBirth string `json:"dateOfBirth"`
 		Nationality string `json:"nationality"`
+		ReferralCode string `json:"referralCode"`
+		TermsAccepted bool `json:"termsAccepted"`
+		PrivacyAccepted bool `json:"privacyAccepted"`
+		TermsVersion string `json:"termsVersion"`
+		PrivacyVersion string `json:"privacyVersion"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -115,6 +122,10 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	contactEmail := normalizeEmail(req.Email)
 	if req.FullName == "" || req.Password == "" {
 		respond(w, http.StatusBadRequest, map[string]any{"error": "fullName and password are required"})
+		return
+	}
+	if !req.TermsAccepted || !req.PrivacyAccepted {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "termsAccepted and privacyAccepted are required"})
 		return
 	}
 
@@ -177,6 +188,17 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		if ifUserID == "" {
 			needsVerify := mapGetBool(signupResp, "requireEmailVerification") || !insforgeSignupHasAccessToken(signupResp)
 			if needsVerify {
+				// Explicitly trigger verification email — InsForge may not auto-send after signup.
+				if insforgeAdminConfigured() {
+					_, _, sendErr := insforgePostEmailSendVerification(clientTypeQuery(r), map[string]any{"email": insforgeMail})
+					if sendErr != nil {
+						log.Printf("user-service: post-signup send-verification for %s failed: %v", insforgeMail, sendErr)
+					} else {
+						log.Printf("user-service: post-signup verification email triggered for %s", insforgeMail)
+					}
+				} else {
+					log.Printf("user-service: INSFORGE_ADMIN_API_KEY not set — cannot send post-signup verification email for %s", insforgeMail)
+				}
 				respond(w, http.StatusCreated, map[string]any{
 					"requireEmailVerification": true,
 					"pendingLocalProfile":      true,
@@ -220,11 +242,44 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 			respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
+		now := time.Now()
+		_ = activeStore.UpsertUserConsents(UserConsents{
+			UserID:            u.ID,
+			TermsAcceptedAt:   &now,
+			PrivacyAcceptedAt: &now,
+			TermsVersion:      strings.TrimSpace(req.TermsVersion),
+			PrivacyVersion:    strings.TrimSpace(req.PrivacyVersion),
+		})
+		code := referralCodeForUserID(u.ID)
+		_ = activeStore.SetUserReferralCode(u.ID, code)
+		if refCode := strings.TrimSpace(req.ReferralCode); refCode != "" {
+			if referrerID, ok := activeStore.FindUserIDByReferralCode(refCode); ok && referrerID != u.ID {
+				createAffiliateReferral(refCode, referrerID, u.ID)
+			}
+			ob.ReferralCode = refCode
+			_ = activeStore.UpsertOnboarding(ob)
+		}
+		emitAudit(u.ID, "register", "user", "account created")
+		if u.ContactEmail != "" {
+			emitNotification("email", u.ContactEmail, "welcome_account_created")
+		}
+
+		// If InsForge requires email verification, explicitly trigger sending the code.
+		needsVerify := mapGetBool(signupResp, "requireEmailVerification") || !insforgeSignupHasAccessToken(signupResp)
+		if needsVerify && insforgeAdminConfigured() {
+			_, _, sendErr := insforgePostEmailSendVerification(clientTypeQuery(r), map[string]any{"email": insforgeMail})
+			if sendErr != nil {
+				log.Printf("user-service: post-signup send-verification for %s failed: %v", insforgeMail, sendErr)
+			} else {
+				log.Printf("user-service: post-signup verification email triggered for %s", insforgeMail)
+			}
+		}
 
 		respond(w, http.StatusCreated, map[string]any{
 			"user":                     userPublicProfile(u),
 			"session":                  sessionPayloadFromInsForge(signupResp, u.ID),
-			"requireEmailVerification": signupResp["requireEmailVerification"],
+			"requireEmailVerification": needsVerify,
+			"referralCode":             code,
 		})
 		return
 	}
@@ -268,6 +323,27 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	now := time.Now()
+	_ = activeStore.UpsertUserConsents(UserConsents{
+		UserID:            u.ID,
+		TermsAcceptedAt:   &now,
+		PrivacyAcceptedAt: &now,
+		TermsVersion:      strings.TrimSpace(req.TermsVersion),
+		PrivacyVersion:    strings.TrimSpace(req.PrivacyVersion),
+	})
+	code := referralCodeForUserID(u.ID)
+	_ = activeStore.SetUserReferralCode(u.ID, code)
+	if refCode := strings.TrimSpace(req.ReferralCode); refCode != "" {
+		if referrerID, ok := activeStore.FindUserIDByReferralCode(refCode); ok && referrerID != u.ID {
+			createAffiliateReferral(refCode, referrerID, u.ID)
+		}
+		ob.ReferralCode = refCode
+		_ = activeStore.UpsertOnboarding(ob)
+	}
+	emitAudit(u.ID, "register", "user", "account created")
+	if u.ContactEmail != "" {
+		emitNotification("email", u.ContactEmail, "welcome_account_created")
+	}
 
 	if !usesPostgres() {
 		devMapsMu.Lock()
@@ -279,6 +355,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusCreated, map[string]any{
 		"user":    userPublicProfile(u),
 		"session": map[string]any{"accessToken": token, "userId": u.ID},
+		"referralCode": code,
 	})
 }
 
@@ -364,6 +441,29 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if ifErr.Status >= 400 {
+					// Backward-compatibility path:
+					// Some existing users were created before InsForge-backed auth and only
+					// have local credentials in users_identity. If InsForge rejects, fall
+					// back to local password verification for those records.
+					if user.PasswordHash != "" || user.Password != "" {
+						if user.PasswordHash != "" {
+							if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+								respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
+								return
+							}
+						} else if user.Password != req.Password {
+							respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
+							return
+						}
+						respond(w, http.StatusOK, map[string]any{
+							"session": map[string]any{
+								"accessToken": "dev-token-" + user.ID,
+								"userId":      user.ID,
+							},
+							"user": userPublicProfile(user),
+						})
+						return
+					}
 					payload := map[string]any{"error": ifErr.Message}
 					if insforgeIndicatesEmailNotVerified(ifErr.Status, ifErr.Message) {
 						payload["requireEmailVerification"] = true
@@ -378,6 +478,25 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 					respond(w, ifErr.Status, payload)
 					return
 				}
+			}
+			if user.PasswordHash != "" || user.Password != "" {
+				if user.PasswordHash != "" {
+					if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+						respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
+						return
+					}
+				} else if user.Password != req.Password {
+					respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
+					return
+				}
+				respond(w, http.StatusOK, map[string]any{
+					"session": map[string]any{
+						"accessToken": "dev-token-" + user.ID,
+						"userId":      user.ID,
+					},
+					"user": userPublicProfile(user),
+				})
+				return
 			}
 			respond(w, http.StatusUnauthorized, map[string]any{"error": err.Error()})
 			return
@@ -437,17 +556,16 @@ func resendVerificationHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if insforgeConfigured() {
-		// send-verification is a server-side operation — use the admin/API key.
-		// The anon key does not have permission to trigger verification emails in InsForge.
-		var (
-			out map[string]any
-			err error
-		)
+		// Use the properly authenticated send-verification function (anon Bearer + x-api-key admin)
+		// so InsForge can identify the project/tenant and actually deliver the email.
+		// Fall back to no-auth only if the admin key is not configured.
+		var out map[string]any
+		var err error
 		if insforgeAdminConfigured() {
-			out, _, err = insforgeAdminPost("/api/auth/email/send-verification", clientTypeQuery(r), map[string]any{"email": target})
+			out, _, err = insforgePostEmailSendVerification(clientTypeQuery(r), map[string]any{"email": target})
 		} else {
-			// Fallback to anon key if no admin key is set (may still fail depending on InsForge project settings)
-			out, _, err = insforgePostWithQuery("/api/auth/email/send-verification", clientTypeQuery(r), map[string]any{"email": target})
+			log.Printf("user-service: INSFORGE_ADMIN_API_KEY not set — falling back to no-auth send-verification for %s (may silently fail)", target)
+			out, _, err = insforgePostNoAuthWithQuery("/api/auth/email/send-verification", clientTypeQuery(r), map[string]any{"email": target})
 		}
 		if err != nil {
 			code := http.StatusBadGateway
@@ -457,7 +575,7 @@ func resendVerificationHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			payload := map[string]any{"error": err.Error()}
 			if code >= 500 || strings.Contains(strings.ToLower(err.Error()), "verification token") {
-				payload["hint"] = "InsForge rejected creating or emailing a verification token. Ensure INSFORGE_ADMIN_API_KEY is set in your .env, outbound email (SMTP or your provider) is configured in the InsForge project dashboard, and the project is active."
+				payload["hint"] = "InsForge could not create or send a verification token for this project. In the InsForge dashboard, configure outbound email (enable Custom SMTP or ensure the default email provider is enabled for your plan/project), and keep the project active. Tayosa is only proxying InsForge's /api/auth/email/send-verification."
 			}
 			respond(w, code, payload)
 			return
@@ -863,10 +981,309 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ob, _ := activeStore.GetOnboarding(uid)
+	cons, _ := activeStore.GetUserConsents(uid)
+	kyc, _ := activeStore.GetKYCProfile(uid)
+	sacco, _ := activeStore.GetSaccoMembership(uid)
+	kibiina, _ := activeStore.GetKibiinaPreference(uid)
+	shares, _, _ := activeStore.GetSharesUnits(uid)
+	refCode, _ := activeStore.GetUserReferralCode(uid)
 	respond(w, http.StatusOK, map[string]any{
 		"user":       userPublicProfile(u),
 		"onboarding": ob,
+		"consents": map[string]any{
+			"termsAcceptedAt":   cons.TermsAcceptedAt,
+			"privacyAcceptedAt": cons.PrivacyAcceptedAt,
+			"termsVersion":      cons.TermsVersion,
+			"privacyVersion":    cons.PrivacyVersion,
+		},
+		"kyc":          kyc,
+		"sacco":        sacco,
+		"kibiina":      kibiina,
+		"shares":       map[string]any{"balanceUnits": shares},
+		"referralCode": refCode,
+		"featureAccess": map[string]any{
+			"canTransact":  kyc.Status == "approved" && sacco.Status == "enrolled",
+			"canJoinKibiina": sacco.Status == "enrolled",
+		},
 	})
+}
+
+func onboardingKYCHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DateOfBirth                string `json:"dateOfBirth"`
+		Gender                     string `json:"gender"`
+		Nationality                string `json:"nationality"`
+		OccupationStatus           string `json:"occupationStatus"`
+		IDType                     string `json:"idType"`
+		IDNumber                   string `json:"idNumber"`
+		IDDocumentFrontKey         string `json:"idDocumentFrontKey"`
+		IDDocumentBackKey          string `json:"idDocumentBackKey"`
+		SelfieKey                  string `json:"selfieKey"`
+		NOKFullName                string `json:"nokFullName"`
+		NOKRelationship            string `json:"nokRelationship"`
+		NOKPhone                   string `json:"nokPhone"`
+		NOKEmail                   string `json:"nokEmail"`
+		SourceOfFunds              string `json:"sourceOfFunds"`
+		PEPStatus                  *bool  `json:"pepStatus"`
+		SACCOMembershipDisclosures string `json:"saccoMembershipDisclosures"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.DateOfBirth) == "" || strings.TrimSpace(req.Gender) == "" || strings.TrimSpace(req.IDType) == "" ||
+		strings.TrimSpace(req.IDNumber) == "" || strings.TrimSpace(req.NOKFullName) == "" || strings.TrimSpace(req.NOKRelationship) == "" ||
+		strings.TrimSpace(req.NOKPhone) == "" || strings.TrimSpace(req.SourceOfFunds) == "" || req.PEPStatus == nil ||
+		strings.TrimSpace(req.SACCOMembershipDisclosures) == "" || strings.TrimSpace(req.IDDocumentFrontKey) == "" ||
+		strings.TrimSpace(req.IDDocumentBackKey) == "" || strings.TrimSpace(req.SelfieKey) == "" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "missing required KYC fields"})
+		return
+	}
+	dob, err := parseOptionalDateOfBirth(req.DateOfBirth)
+	if err != nil {
+		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	nat, err := normalizeNationality(req.Nationality)
+	if err != nil {
+		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	uid := authedUserID(r)
+	now := time.Now()
+	kyc := KYCProfile{
+		UserID:                     uid,
+		Status:                     "pending",
+		DateOfBirth:                dob,
+		Gender:                     strings.TrimSpace(req.Gender),
+		Nationality:                nat,
+		OccupationStatus:           strings.TrimSpace(req.OccupationStatus),
+		IDType:                     strings.TrimSpace(req.IDType),
+		IDNumber:                   strings.TrimSpace(req.IDNumber),
+		NOKFullName:                strings.TrimSpace(req.NOKFullName),
+		NOKRelationship:            strings.TrimSpace(req.NOKRelationship),
+		NOKPhone:                   strings.TrimSpace(req.NOKPhone),
+		NOKEmail:                   strings.TrimSpace(req.NOKEmail),
+		SourceOfFunds:              strings.TrimSpace(req.SourceOfFunds),
+		PEPStatus:                  req.PEPStatus,
+		SACCOMembershipDisclosures: strings.TrimSpace(req.SACCOMembershipDisclosures),
+		SubmittedAt:                &now,
+	}
+	if err := activeStore.UpsertKYCProfile(kyc); err != nil {
+		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	docs := []KYCDocument{
+		{DocType: "id_document", DocSide: "front", StorageKey: strings.TrimSpace(req.IDDocumentFrontKey)},
+		{DocType: "id_document", DocSide: "back", StorageKey: strings.TrimSpace(req.IDDocumentBackKey)},
+		{DocType: "selfie", StorageKey: strings.TrimSpace(req.SelfieKey)},
+	}
+	_ = activeStore.ReplaceKYCDocuments(uid, docs)
+	emitAudit(uid, "kyc_submit", "kyc", "kyc submitted")
+	if u, ok := activeStore.FindByUserID(uid); ok && u.ContactEmail != "" {
+		emitNotification("email", u.ContactEmail, "kyc_submitted")
+	}
+	respond(w, http.StatusAccepted, map[string]any{"kyc": kyc, "documents": docs})
+}
+
+func onboardingSaccoHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		District                 string  `json:"district"`
+		County                   string  `json:"county"`
+		SubCounty                string  `json:"subCounty"`
+		Parish                   string  `json:"parish"`
+		Village                  string  `json:"village"`
+		StreetPlot               string  `json:"streetPlot"`
+		MobileMoneyProvider      string  `json:"mobileMoneyProvider"`
+		MobileMoneyNumber        string  `json:"mobileMoneyNumber"`
+		SecondaryMoMoNumber      string  `json:"secondaryMoMoNumber"`
+		ContributionFrequency    string  `json:"contributionFrequency"`
+		SavingsGoalAmount        float64 `json:"savingsGoalAmount"`
+		SavingsGoalPurpose       string  `json:"savingsGoalPurpose"`
+		SharesToPurchase         int     `json:"sharesToPurchase"`
+		EntranceFeePaymentMethod string  `json:"entranceFeePaymentMethod"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.District) == "" || strings.TrimSpace(req.County) == "" || strings.TrimSpace(req.SubCounty) == "" ||
+		strings.TrimSpace(req.Parish) == "" || strings.TrimSpace(req.Village) == "" || strings.TrimSpace(req.MobileMoneyProvider) == "" ||
+		strings.TrimSpace(req.MobileMoneyNumber) == "" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "missing required SACCO fields"})
+		return
+	}
+	if req.SharesToPurchase < 1 {
+		req.SharesToPurchase = 1
+	}
+	ok, err := activeStore.GeoRecordExists(req.District, req.County, req.SubCounty, req.Parish, req.Village)
+	if err != nil {
+		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !ok {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "geo does not match official hierarchy"})
+		return
+	}
+	uid := authedUserID(r)
+	if k, found := activeStore.GetKYCProfile(uid); !found || k.Status != "approved" {
+		respond(w, http.StatusForbidden, map[string]any{"error": "KYC must be approved before SACCO enrollment"})
+		return
+	}
+	mem := SaccoMembership{
+		UserID:                   uid,
+		Status:                   "enrolled",
+		District:                 strings.TrimSpace(req.District),
+		County:                   strings.TrimSpace(req.County),
+		SubCounty:                strings.TrimSpace(req.SubCounty),
+		Parish:                   strings.TrimSpace(req.Parish),
+		Village:                  strings.TrimSpace(req.Village),
+		StreetPlot:               strings.TrimSpace(req.StreetPlot),
+		MobileMoneyProvider:      strings.TrimSpace(req.MobileMoneyProvider),
+		MobileMoneyNumber:        strings.TrimSpace(req.MobileMoneyNumber),
+		SecondaryMoMoNumber:      strings.TrimSpace(req.SecondaryMoMoNumber),
+		ContributionFrequency:    strings.TrimSpace(req.ContributionFrequency),
+		SavingsGoalAmount:        req.SavingsGoalAmount,
+		SavingsGoalPurpose:       strings.TrimSpace(req.SavingsGoalPurpose),
+		SharesToPurchase:         req.SharesToPurchase,
+		EntranceFeePaymentMethod: strings.TrimSpace(req.EntranceFeePaymentMethod),
+	}
+	if err := activeStore.UpsertSaccoMembership(mem); err != nil {
+		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	_ = activeStore.EnsureSharesLedger(uid, req.SharesToPurchase)
+	emitAudit(uid, "sacco_enroll", "sacco_membership", "sacco enrollment submitted")
+	respond(w, http.StatusOK, map[string]any{"membership": mem})
+}
+
+func onboardingKibiinaHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Action                 string  `json:"action"`
+		InviteCode             string  `json:"inviteCode"`
+		GroupName              string  `json:"groupName"`
+		ContributionAmount     float64 `json:"contributionAmount"`
+		CycleFrequency         string  `json:"cycleFrequency"`
+		MaxGroupSize           int     `json:"maxGroupSize"`
+		PayoutOrderPreference  string  `json:"payoutOrderPreference"`
+		NotificationPreference string  `json:"notificationPreference"`
+		LanguagePreference     string  `json:"languagePreference"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.Action) == "" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "action is required"})
+		return
+	}
+	uid := authedUserID(r)
+	if s, ok := activeStore.GetSaccoMembership(uid); !ok || s.Status != "enrolled" {
+		respond(w, http.StatusForbidden, map[string]any{"error": "SACCO membership is required before Kibiina setup"})
+		return
+	}
+	p := KibiinaPreference{
+		UserID:                 uid,
+		Action:                 strings.TrimSpace(req.Action),
+		InviteCode:             strings.TrimSpace(req.InviteCode),
+		GroupName:              strings.TrimSpace(req.GroupName),
+		ContributionAmount:     req.ContributionAmount,
+		CycleFrequency:         strings.TrimSpace(req.CycleFrequency),
+		MaxGroupSize:           req.MaxGroupSize,
+		PayoutOrderPreference:  strings.TrimSpace(req.PayoutOrderPreference),
+		NotificationPreference: strings.TrimSpace(req.NotificationPreference),
+		LanguagePreference:     strings.TrimSpace(req.LanguagePreference),
+	}
+	if err := activeStore.UpsertKibiinaPreference(p); err != nil {
+		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	emitAudit(uid, "kibiina_setup", "kibiina", "kibiina preference captured")
+	respond(w, http.StatusOK, map[string]any{"kibiina": p})
+}
+
+func adminKYCDecisionHandler(w http.ResponseWriter, r *http.Request) {
+	adminSecret := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
+	if adminSecret == "" || strings.TrimSpace(r.Header.Get("X-Admin-Secret")) != adminSecret {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "admin authentication failed"})
+		return
+	}
+	if r.Method == http.MethodGet {
+		status := strings.TrimSpace(r.URL.Query().Get("status"))
+		limit := 50
+		items, err := activeStore.ListAdminKYCQueue(status, limit)
+		if err != nil {
+			respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		respond(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+		return
+	}
+	var req struct {
+		Status     string `json:"status"`
+		ReviewNote string `json:"reviewNote"`
+		ReviewedBy string `json:"reviewedBy"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if req.Status != "approved" && req.Status != "rejected" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "status must be approved or rejected"})
+		return
+	}
+	userID := strings.TrimSpace(r.URL.Query().Get("userId"))
+	if userID == "" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "userId query parameter is required"})
+		return
+	}
+	if err := activeStore.SetKYCDecision(userID, req.Status, strings.TrimSpace(req.ReviewedBy), strings.TrimSpace(req.ReviewNote)); err != nil {
+		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	emitAudit(firstNonEmpty(req.ReviewedBy, "admin"), "kyc_"+req.Status, "kyc", "admin decision")
+	if u, ok := activeStore.FindByUserID(userID); ok && u.ContactEmail != "" {
+		emitNotification("email", u.ContactEmail, "kyc_"+req.Status)
+	}
+	respond(w, http.StatusOK, map[string]any{"status": req.Status, "userId": userID})
+}
+
+func adminSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	adminSecret := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
+	if adminSecret == "" || strings.TrimSpace(r.Header.Get("X-Admin-Secret")) != adminSecret {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "admin authentication failed"})
+		return
+	}
+	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	if key == "" {
+		key = "fees"
+	}
+	switch r.Method {
+	case http.MethodGet:
+		v, ok, err := activeStore.GetAdminSetting(key)
+		if err != nil {
+			respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !ok {
+			v = map[string]any{}
+		}
+		respond(w, http.StatusOK, map[string]any{"key": key, "value": v})
+	case http.MethodPatch, http.MethodPost:
+		var body map[string]any
+		if err := decodeJSON(r, &body); err != nil {
+			respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if err := activeStore.SetAdminSetting(key, body); err != nil {
+			respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		emitAudit("admin", "admin_setting_update", "admin_settings:"+key, "updated")
+		respond(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		respond(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
 }
 
 func geoLookupHandler(w http.ResponseWriter, r *http.Request) {

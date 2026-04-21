@@ -436,3 +436,345 @@ SELECT
   COALESCE((SELECT COUNT(*)::int FROM village_kibiina_groups), 0)`).Scan(&st.ParishSaccos, &st.VillageKibiinaGroups)
 	return st, err
 }
+
+func (s *PostgresStore) UpsertUserConsents(c UserConsents) error {
+	ctx := context.Background()
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO user_consents (user_id, terms_accepted_at, privacy_accepted_at, terms_version, privacy_version, updated_at)
+VALUES ($1,$2,$3,$4,$5, now())
+ON CONFLICT (user_id) DO UPDATE SET
+  terms_accepted_at = EXCLUDED.terms_accepted_at,
+  privacy_accepted_at = EXCLUDED.privacy_accepted_at,
+  terms_version = EXCLUDED.terms_version,
+  privacy_version = EXCLUDED.privacy_version,
+  updated_at = now()`,
+		c.UserID, c.TermsAcceptedAt, c.PrivacyAcceptedAt, nullStr(c.TermsVersion), nullStr(c.PrivacyVersion))
+	return err
+}
+
+func (s *PostgresStore) GetUserConsents(userID string) (UserConsents, bool) {
+	ctx := context.Background()
+	row := s.pool.QueryRow(ctx, `
+SELECT user_id, terms_accepted_at, privacy_accepted_at, COALESCE(terms_version,''), COALESCE(privacy_version,''), updated_at
+FROM user_consents WHERE user_id = $1`, userID)
+	var c UserConsents
+	var tv, pv string
+	if err := row.Scan(&c.UserID, &c.TermsAcceptedAt, &c.PrivacyAcceptedAt, &tv, &pv, &c.LastUpdatedAt); err != nil {
+		return UserConsents{}, false
+	}
+	c.TermsVersion = tv
+	c.PrivacyVersion = pv
+	return c, true
+}
+
+func (s *PostgresStore) UpsertKYCProfile(k KYCProfile) error {
+	ctx := context.Background()
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO kyc_profiles (
+  user_id, status, date_of_birth, gender, nationality, occupation_status, id_type, id_number,
+  nok_full_name, nok_relationship, nok_phone, nok_email, source_of_funds, pep_status,
+  sacco_membership_disclosures, submitted_at, reviewed_at, review_note, reviewed_by, updated_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
+ON CONFLICT (user_id) DO UPDATE SET
+  status = EXCLUDED.status,
+  date_of_birth = EXCLUDED.date_of_birth,
+  gender = EXCLUDED.gender,
+  nationality = EXCLUDED.nationality,
+  occupation_status = EXCLUDED.occupation_status,
+  id_type = EXCLUDED.id_type,
+  id_number = EXCLUDED.id_number,
+  nok_full_name = EXCLUDED.nok_full_name,
+  nok_relationship = EXCLUDED.nok_relationship,
+  nok_phone = EXCLUDED.nok_phone,
+  nok_email = EXCLUDED.nok_email,
+  source_of_funds = EXCLUDED.source_of_funds,
+  pep_status = EXCLUDED.pep_status,
+  sacco_membership_disclosures = EXCLUDED.sacco_membership_disclosures,
+  submitted_at = EXCLUDED.submitted_at,
+  reviewed_at = EXCLUDED.reviewed_at,
+  review_note = EXCLUDED.review_note,
+  reviewed_by = EXCLUDED.reviewed_by,
+  updated_at = now()`,
+		k.UserID, k.Status, k.DateOfBirth, nullStr(k.Gender), nullStr(k.Nationality), nullStr(k.OccupationStatus),
+		nullStr(k.IDType), nullStr(k.IDNumber), nullStr(k.NOKFullName), nullStr(k.NOKRelationship), nullStr(k.NOKPhone),
+		nullStr(k.NOKEmail), nullStr(k.SourceOfFunds), k.PEPStatus, nullStr(k.SACCOMembershipDisclosures),
+		k.SubmittedAt, k.ReviewedAt, nullStr(k.ReviewNote), nullStr(k.ReviewedBy))
+	return err
+}
+
+func (s *PostgresStore) GetKYCProfile(userID string) (KYCProfile, bool) {
+	ctx := context.Background()
+	row := s.pool.QueryRow(ctx, `
+SELECT user_id, status, date_of_birth, COALESCE(gender,''), COALESCE(nationality,''), COALESCE(occupation_status,''),
+COALESCE(id_type,''), COALESCE(id_number,''), COALESCE(nok_full_name,''), COALESCE(nok_relationship,''),
+COALESCE(nok_phone,''), COALESCE(nok_email,''), COALESCE(source_of_funds,''), pep_status,
+COALESCE(sacco_membership_disclosures,''), submitted_at, reviewed_at, COALESCE(review_note,''), COALESCE(reviewed_by,''), updated_at
+FROM kyc_profiles WHERE user_id = $1`, userID)
+	var k KYCProfile
+	if err := row.Scan(&k.UserID, &k.Status, &k.DateOfBirth, &k.Gender, &k.Nationality, &k.OccupationStatus,
+		&k.IDType, &k.IDNumber, &k.NOKFullName, &k.NOKRelationship, &k.NOKPhone, &k.NOKEmail, &k.SourceOfFunds, &k.PEPStatus,
+		&k.SACCOMembershipDisclosures, &k.SubmittedAt, &k.ReviewedAt, &k.ReviewNote, &k.ReviewedBy, &k.LastUpdatedAt); err != nil {
+		return KYCProfile{}, false
+	}
+	return k, true
+}
+
+func (s *PostgresStore) ReplaceKYCDocuments(userID string, docs []KYCDocument) error {
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `DELETE FROM kyc_documents WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	for _, d := range docs {
+		if _, err := tx.Exec(ctx, `INSERT INTO kyc_documents (user_id, doc_type, doc_side, storage_key) VALUES ($1,$2,$3,$4)`,
+			userID, d.DocType, nullStr(d.DocSide), d.StorageKey); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) GetKYCDocuments(userID string) ([]KYCDocument, error) {
+	ctx := context.Background()
+	rows, err := s.pool.Query(ctx, `SELECT doc_type, COALESCE(doc_side,''), storage_key, created_at FROM kyc_documents WHERE user_id=$1 ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KYCDocument
+	for rows.Next() {
+		var d KYCDocument
+		if err := rows.Scan(&d.DocType, &d.DocSide, &d.StorageKey, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) SetKYCDecision(userID, status, reviewedBy, reviewNote string) error {
+	ctx := context.Background()
+	_, err := s.pool.Exec(ctx, `
+UPDATE kyc_profiles
+SET status=$2, reviewed_by=$3, review_note=$4, reviewed_at=now(), updated_at=now()
+WHERE user_id=$1`, userID, status, reviewedBy, reviewNote)
+	return err
+}
+
+func (s *PostgresStore) UpsertSaccoMembership(m SaccoMembership) error {
+	ctx := context.Background()
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO sacco_memberships (
+  user_id, status, district, county, sub_county, parish, village, street_plot, mobile_money_provider,
+  mobile_money_number, secondary_momo_number, contribution_frequency, savings_goal_amount, savings_goal_purpose,
+  shares_to_purchase, entrance_fee_payment_method, updated_at
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
+ON CONFLICT (user_id) DO UPDATE SET
+  status=EXCLUDED.status,
+  district=EXCLUDED.district,
+  county=EXCLUDED.county,
+  sub_county=EXCLUDED.sub_county,
+  parish=EXCLUDED.parish,
+  village=EXCLUDED.village,
+  street_plot=EXCLUDED.street_plot,
+  mobile_money_provider=EXCLUDED.mobile_money_provider,
+  mobile_money_number=EXCLUDED.mobile_money_number,
+  secondary_momo_number=EXCLUDED.secondary_momo_number,
+  contribution_frequency=EXCLUDED.contribution_frequency,
+  savings_goal_amount=EXCLUDED.savings_goal_amount,
+  savings_goal_purpose=EXCLUDED.savings_goal_purpose,
+  shares_to_purchase=EXCLUDED.shares_to_purchase,
+  entrance_fee_payment_method=EXCLUDED.entrance_fee_payment_method,
+  updated_at=now()`,
+		m.UserID, m.Status, nullStr(m.District), nullStr(m.County), nullStr(m.SubCounty), nullStr(m.Parish), nullStr(m.Village),
+		nullStr(m.StreetPlot), nullStr(m.MobileMoneyProvider), nullStr(m.MobileMoneyNumber), nullStr(m.SecondaryMoMoNumber),
+		nullStr(m.ContributionFrequency), m.SavingsGoalAmount, nullStr(m.SavingsGoalPurpose), m.SharesToPurchase, nullStr(m.EntranceFeePaymentMethod))
+	return err
+}
+
+func (s *PostgresStore) GetSaccoMembership(userID string) (SaccoMembership, bool) {
+	ctx := context.Background()
+	row := s.pool.QueryRow(ctx, `
+SELECT user_id, status, COALESCE(district,''), COALESCE(county,''), COALESCE(sub_county,''), COALESCE(parish,''),
+COALESCE(village,''), COALESCE(street_plot,''), COALESCE(mobile_money_provider,''), COALESCE(mobile_money_number,''),
+COALESCE(secondary_momo_number,''), COALESCE(contribution_frequency,''), COALESCE(savings_goal_amount,0),
+COALESCE(savings_goal_purpose,''), COALESCE(shares_to_purchase,0), COALESCE(entrance_fee_payment_method,''), updated_at
+FROM sacco_memberships WHERE user_id=$1`, userID)
+	var m SaccoMembership
+	if err := row.Scan(&m.UserID, &m.Status, &m.District, &m.County, &m.SubCounty, &m.Parish, &m.Village, &m.StreetPlot,
+		&m.MobileMoneyProvider, &m.MobileMoneyNumber, &m.SecondaryMoMoNumber, &m.ContributionFrequency,
+		&m.SavingsGoalAmount, &m.SavingsGoalPurpose, &m.SharesToPurchase, &m.EntranceFeePaymentMethod, &m.LastUpdatedAt); err != nil {
+		return SaccoMembership{}, false
+	}
+	return m, true
+}
+
+func (s *PostgresStore) EnsureSharesLedger(userID string, sharesUnits int) error {
+	ctx := context.Background()
+	if sharesUnits <= 0 {
+		sharesUnits = 1
+	}
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO shares_ledger (user_id, balance_units, shares_balance)
+VALUES ($1,$2,$2)
+ON CONFLICT (user_id) DO UPDATE SET
+  balance_units = GREATEST(shares_ledger.balance_units, EXCLUDED.balance_units),
+  shares_balance = GREATEST(shares_ledger.shares_balance, EXCLUDED.shares_balance),
+  updated_at = now()`, userID, sharesUnits)
+	return err
+}
+
+func (s *PostgresStore) GetSharesUnits(userID string) (int, bool, error) {
+	ctx := context.Background()
+	row := s.pool.QueryRow(ctx, `SELECT COALESCE(balance_units, 0) FROM shares_ledger WHERE user_id=$1`, userID)
+	var v int
+	if err := row.Scan(&v); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return v, true, nil
+}
+
+func (s *PostgresStore) UpsertKibiinaPreference(k KibiinaPreference) error {
+	ctx := context.Background()
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO kibiina_preferences (
+  user_id, action, invite_code, group_name, contribution_amount, cycle_frequency, max_group_size,
+  payout_order_preference, notification_preference, language_preference, updated_at
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+ON CONFLICT (user_id) DO UPDATE SET
+  action=EXCLUDED.action,
+  invite_code=EXCLUDED.invite_code,
+  group_name=EXCLUDED.group_name,
+  contribution_amount=EXCLUDED.contribution_amount,
+  cycle_frequency=EXCLUDED.cycle_frequency,
+  max_group_size=EXCLUDED.max_group_size,
+  payout_order_preference=EXCLUDED.payout_order_preference,
+  notification_preference=EXCLUDED.notification_preference,
+  language_preference=EXCLUDED.language_preference,
+  updated_at=now()`,
+		k.UserID, k.Action, nullStr(k.InviteCode), nullStr(k.GroupName), k.ContributionAmount, nullStr(k.CycleFrequency),
+		k.MaxGroupSize, nullStr(k.PayoutOrderPreference), nullStr(k.NotificationPreference), nullStr(k.LanguagePreference))
+	return err
+}
+
+func (s *PostgresStore) GetKibiinaPreference(userID string) (KibiinaPreference, bool) {
+	ctx := context.Background()
+	row := s.pool.QueryRow(ctx, `
+SELECT user_id, action, COALESCE(invite_code,''), COALESCE(group_name,''), COALESCE(contribution_amount,0),
+COALESCE(cycle_frequency,''), COALESCE(max_group_size,0), COALESCE(payout_order_preference,''),
+COALESCE(notification_preference,''), COALESCE(language_preference,''), updated_at
+FROM kibiina_preferences WHERE user_id=$1`, userID)
+	var k KibiinaPreference
+	if err := row.Scan(&k.UserID, &k.Action, &k.InviteCode, &k.GroupName, &k.ContributionAmount, &k.CycleFrequency,
+		&k.MaxGroupSize, &k.PayoutOrderPreference, &k.NotificationPreference, &k.LanguagePreference, &k.LastUpdatedAt); err != nil {
+		return KibiinaPreference{}, false
+	}
+	return k, true
+}
+
+func (s *PostgresStore) ListAdminKYCQueue(status string, limit int) ([]AdminKYCQueueItem, error) {
+	ctx := context.Background()
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	q := `
+SELECT
+  u.user_id,
+  u.full_name,
+  u.phone_e164,
+  COALESCE(u.contact_email, ''),
+  COALESCE(k.status, 'not_started'),
+  COALESCE(k.id_type, ''),
+  COALESCE(k.id_number, ''),
+  k.submitted_at,
+  k.reviewed_at
+FROM users_identity u
+LEFT JOIN kyc_profiles k ON k.user_id = u.user_id
+WHERE ($1 = '' OR $1 = 'all' OR COALESCE(k.status, 'not_started') = $1)
+ORDER BY COALESCE(k.submitted_at, u.created_at) DESC
+LIMIT $2`
+	rows, err := s.pool.Query(ctx, q, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AdminKYCQueueItem
+	for rows.Next() {
+		var k AdminKYCQueueItem
+		if err := rows.Scan(&k.UserID, &k.FullName, &k.PhoneE164, &k.ContactEmail, &k.Status, &k.IDType, &k.IDNumber, &k.SubmittedAt, &k.ReviewedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) GetAdminSetting(key string) (map[string]any, bool, error) {
+	ctx := context.Background()
+	row := s.pool.QueryRow(ctx, `SELECT value FROM admin_settings WHERE key = $1`, key)
+	var raw []byte
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, false, err
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	return out, true, nil
+}
+
+func (s *PostgresStore) SetAdminSetting(key string, value map[string]any) error {
+	ctx := context.Background()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+INSERT INTO admin_settings (key, value, updated_at)
+VALUES ($1, $2::jsonb, now())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, string(raw))
+	return err
+}
+
+func (s *PostgresStore) SetUserReferralCode(userID, referralCode string) error {
+	ctx := context.Background()
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO user_referral_codes (user_id, referral_code)
+VALUES ($1,$2)
+ON CONFLICT (user_id) DO UPDATE SET referral_code = EXCLUDED.referral_code`, userID, referralCode)
+	return err
+}
+
+func (s *PostgresStore) GetUserReferralCode(userID string) (string, bool) {
+	ctx := context.Background()
+	row := s.pool.QueryRow(ctx, `SELECT referral_code FROM user_referral_codes WHERE user_id = $1`, userID)
+	var code string
+	if err := row.Scan(&code); err != nil {
+		return "", false
+	}
+	return code, true
+}
+
+func (s *PostgresStore) FindUserIDByReferralCode(referralCode string) (string, bool) {
+	ctx := context.Background()
+	row := s.pool.QueryRow(ctx, `SELECT user_id FROM user_referral_codes WHERE referral_code = $1`, referralCode)
+	var userID string
+	if err := row.Scan(&userID); err != nil {
+		return "", false
+	}
+	return userID, true
+}

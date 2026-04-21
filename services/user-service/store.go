@@ -20,6 +20,25 @@ type Store interface {
 	GeoDistinct(level, parent string) ([]string, error)
 	GeoRecordExists(district, county, subCounty, parish, village string) (bool, error)
 	GroupPolicyStats() (GroupPolicyStats, error)
+	UpsertUserConsents(c UserConsents) error
+	GetUserConsents(userID string) (UserConsents, bool)
+	SetUserReferralCode(userID, referralCode string) error
+	GetUserReferralCode(userID string) (string, bool)
+	FindUserIDByReferralCode(referralCode string) (string, bool)
+	UpsertKYCProfile(k KYCProfile) error
+	GetKYCProfile(userID string) (KYCProfile, bool)
+	ReplaceKYCDocuments(userID string, docs []KYCDocument) error
+	GetKYCDocuments(userID string) ([]KYCDocument, error)
+	SetKYCDecision(userID, status, reviewedBy, reviewNote string) error
+	UpsertSaccoMembership(m SaccoMembership) error
+	GetSaccoMembership(userID string) (SaccoMembership, bool)
+	EnsureSharesLedger(userID string, sharesUnits int) error
+	GetSharesUnits(userID string) (int, bool, error)
+	UpsertKibiinaPreference(k KibiinaPreference) error
+	GetKibiinaPreference(userID string) (KibiinaPreference, bool)
+	ListAdminKYCQueue(status string, limit int) ([]AdminKYCQueueItem, error)
+	GetAdminSetting(key string) (map[string]any, bool, error)
+	SetAdminSetting(key string, value map[string]any) error
 	EnsureGeoSeeded() error
 	Ping() error
 	Close()

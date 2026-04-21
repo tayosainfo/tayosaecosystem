@@ -28,3 +28,14 @@ dist-ssr
 *.exe
 **/user_service
 **/fee_service
+
+
+# Android / Gradle build files
+.gradle/
+build/
+android/build/
+app/mobile_app/android/build/
+
+# Temporary files
+*.tmp
+Thumbs.db

@@ -1,8 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Shield, Lock, Mail, Eye, EyeOff, User as UserIcon, Phone, ArrowRight, Sparkles } from 'lucide-react';
 import { platformApi, RegisterPendingResponse } from '../../lib/platformApi';
+import { useAuth } from '../../hooks/useAuth';
 
 const useInsForgeWeb = () => Boolean(String(import.meta.env.VITE_INSFORGE_BASE_URL || '').trim());
+
+const hasSession = (v: unknown): v is { session: { accessToken: string }; user: { id: string } } => {
+  if (typeof v !== 'object' || v === null) {
+    return false;
+  }
+  const o = v as any;
+  return Boolean(o.session && typeof o.session.accessToken === 'string' && o.user && typeof o.user.id === 'string');
+};
 
 const getErrorMessage = (err: unknown, fallback: string): string => {
   if (err instanceof Error && err.message) {
@@ -12,19 +21,30 @@ const getErrorMessage = (err: unknown, fallback: string): string => {
 };
 
 const Register: React.FC = () => {
+  const { applySession } = useAuth();
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
     email: '',
     phone: '',
     password: '',
-    confirmPassword: ''
+    confirmPassword: '',
+    referralCode: ''
   });
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const insForgeWeb = useInsForgeWeb();
+
+  useEffect(() => {
+    const ref = new URLSearchParams(window.location.search).get('ref');
+    if (ref) {
+      setFormData((prev) => ({ ...prev, referralCode: ref }));
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,6 +64,10 @@ const Register: React.FC = () => {
     }
     if (formData.password.length < 6) {
       setError('Password must be at least 6 characters long');
+      return;
+    }
+    if (!termsAccepted || !privacyAccepted) {
+      setError('You must accept Terms and Privacy Policy');
       return;
     }
     if (insForgeWeb && !formData.email.trim()) {
@@ -66,6 +90,11 @@ const Register: React.FC = () => {
         email: formData.email,
         password: formData.password,
         nationality: 'UG',
+        referralCode: formData.referralCode || undefined,
+        termsAccepted,
+        privacyAccepted,
+        termsVersion: 'v1',
+        privacyVersion: 'v1',
       });
       const pending = res as RegisterPendingResponse;
       if (pending.pendingLocalProfile && pending.requireEmailVerification) {
@@ -79,6 +108,11 @@ const Register: React.FC = () => {
         }
         const em = pending.email || formData.email.trim();
         window.location.href = `/verify?email=${encodeURIComponent(em)}`;
+        return;
+      }
+      if (hasSession(res)) {
+        applySession(res as any);
+        window.location.href = '/home';
         return;
       }
       window.location.href = '/login';
@@ -215,6 +249,32 @@ const Register: React.FC = () => {
                     ? 'InsForge sends a verification code to this address'
                     : 'Email is optional but recommended for account recovery'}
                 </p>
+              </div>
+
+              <div>
+                <label htmlFor="referralCode" className="block text-sm font-medium text-white mb-2">
+                  Referral Code (Optional)
+                </label>
+                <input
+                  id="referralCode"
+                  name="referralCode"
+                  type="text"
+                  className="block w-full px-3 py-3 border border-white/30 rounded-xl bg-white/10 backdrop-blur-sm text-white placeholder-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  placeholder="TAY-XXXX1234"
+                  value={formData.referralCode}
+                  onChange={(e) => handleInputChange('referralCode', e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2 text-white text-sm">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={termsAccepted} onChange={(e) => setTermsAccepted(e.target.checked)} />
+                  I accept Terms and Conditions
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={privacyAccepted} onChange={(e) => setPrivacyAccepted(e.target.checked)} />
+                  I accept Privacy Policy
+                </label>
               </div>
 
               <div>

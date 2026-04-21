@@ -6,6 +6,14 @@ import Register from './pages/auth/Register';
 import { VerifyEmail } from './pages/auth/VerifyEmail';
 import ForgotPassword from './pages/auth/ForgotPassword';
 import ResetPassword from './pages/auth/ResetPassword';
+import Onboarding from './pages/onboarding/Onboarding';
+import OnboardingNext from './pages/onboarding/OnboardingNext';
+import Home from './pages/Home';
+import KycStep from './pages/KycStep';
+import SaccoSetup from './pages/SaccoSetup';
+import Affiliate from './pages/Affiliate';
+import KibiinaSetup from './pages/KibiinaSetup';
+import Admin from './pages/Admin';
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -37,14 +45,33 @@ const AppContent: React.FC = () => {
     return <Login />;
   }
 
-  return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center max-w-md w-full">
-        <h1 className="text-2xl font-bold text-gray-900 mb-4">Authentication Successful</h1>
-        <p className="text-gray-600">The application is being rebuilt to use InsForge. Sacco backend and frontend components have been removed.</p>
-      </div>
-    </div>
-  );
+  if (window.location.pathname.startsWith('/onboarding')) {
+    if (window.location.pathname.startsWith('/onboarding/next')) {
+      return <OnboardingNext />;
+    }
+    return <Onboarding />;
+  }
+  if (window.location.pathname.startsWith('/kyc')) {
+    return <KycStep />;
+  }
+  if (window.location.pathname.startsWith('/sacco')) {
+    return <SaccoSetup />;
+  }
+  if (window.location.pathname.startsWith('/affiliate')) {
+    return <Affiliate />;
+  }
+  if (window.location.pathname.startsWith('/admin')) {
+    return <Admin />;
+  }
+  if (window.location.pathname.startsWith('/kibiina')) {
+    return <KibiinaSetup />;
+  }
+  if (window.location.pathname.startsWith('/home')) {
+    return <Home />;
+  }
+
+  window.location.replace('/home');
+  return null;
 };
 
 function App() {

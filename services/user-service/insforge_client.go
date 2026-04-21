@@ -90,6 +90,24 @@ func insforgePostWithQuery(path string, q url.Values, body any) (map[string]any,
 	return out, status, nil
 }
 
+// insforgePostNoAuthWithQuery performs a POST with no Authorization header.
+// Some InsForge "Client" routes (like /api/auth/email/send-verification) are intentionally unauthenticated
+// to prevent user enumeration and should return 202 even when the email does not exist.
+func insforgePostNoAuthWithQuery(path string, q url.Values, body any) (map[string]any, int, error) {
+	raw, status, err := insforgeDoJSON(http.MethodPost, path, q, body, "none", "", nil)
+	if err != nil {
+		return nil, status, err
+	}
+	var out map[string]any
+	if len(raw) == 0 {
+		return map[string]any{}, status, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, status, err
+	}
+	return out, status, nil
+}
+
 // insforgePostAnonAnyHTTPStatus POSTs with the anon key and returns JSON + status even on 4xx/5xx
 // (used to read user id from EMAIL_NOT_VERIFIED login responses).
 func insforgePostAnonAnyHTTPStatus(path string, q url.Values, body any) (map[string]any, int, error) {
@@ -312,11 +330,64 @@ func insforgeLogoutForward(r *http.Request) ([]byte, int, error) {
 }
 
 func insforgeAdminAPIKey() string {
-	return strings.TrimSpace(os.Getenv("INSFORGE_ADMIN_API_KEY"))
+	s := strings.TrimSpace(os.Getenv("INSFORGE_ADMIN_API_KEY"))
+	s = strings.TrimPrefix(s, "\ufeff") // UTF-8 BOM from some editors
+	return s
 }
 
 func insforgeAdminConfigured() bool {
 	return insforgeAdminAPIKey() != "" && insforgeBaseURL() != ""
+}
+
+// insforgePostEmailSendVerification calls POST /api/auth/email/send-verification with the
+// project anon JWT (tenant context) and the project API key in x-api-key (ik_...).
+// InsForge documents both Bearer and x-api-key for API keys; many routes need anon for
+// project routing plus the API key for privileged actions.
+func insforgePostEmailSendVerification(q url.Values, body map[string]any) (map[string]any, int, error) {
+	base := insforgeBaseURL()
+	anon := insforgeAnonKey()
+	admin := strings.TrimSpace(os.Getenv("INSFORGE_ADMIN_API_KEY"))
+	if base == "" || anon == "" {
+		return nil, 0, errors.New("InsForge is not configured (INSFORGE_BASE_URL and INSFORGE_ANON_KEY required)")
+	}
+	if admin == "" {
+		return nil, 0, errors.New("INSFORGE_ADMIN_API_KEY is empty")
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequest(http.MethodPost, insforgeURL("/api/auth/email/send-verification", q), bytes.NewReader(raw))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+	req.Header.Set("Authorization", "Bearer "+anon)
+	req.Header.Set("x-api-key", admin)
+
+	resp, err := insforgeHTTPClient().Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, resp.StatusCode, &InsforgeRequestError{
+			Status:  resp.StatusCode,
+			Message: insforgeErrorMessage(respBody, resp.StatusCode),
+		}
+	}
+	var out map[string]any
+	if len(respBody) > 0 {
+		_ = json.Unmarshal(respBody, &out)
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	return out, resp.StatusCode, nil
 }
 
 // insforgeAdminPost calls an InsForge route with the admin/API key (server-side operations

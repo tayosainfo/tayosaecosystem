@@ -5,6 +5,14 @@ import { isPlatformApiError, platformApi, RegisterPendingResponse } from '../../
 
 const useInsForgeWeb = () => Boolean(String(import.meta.env.VITE_INSFORGE_BASE_URL || '').trim());
 
+const hasSession = (v: unknown): v is { session: { accessToken: string }; user: { id: string } } => {
+  if (typeof v !== 'object' || v === null) {
+    return false;
+  }
+  const o = v as any;
+  return Boolean(o.session && typeof o.session.accessToken === 'string' && o.user && typeof o.user.id === 'string');
+};
+
 const getErrorMessage = (err: unknown, fallback: string): string => {
   if (err instanceof Error && err.message) {
     return err.message;
@@ -23,7 +31,7 @@ const LoginForm: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
-  const { login, isLoading } = useAuth();
+  const { login, applySession, isLoading } = useAuth();
   const insForgeWeb = useInsForgeWeb();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -64,6 +72,10 @@ const LoginForm: React.FC = () => {
           email,
           password,
           nationality: 'UG',
+          termsAccepted: true,
+          privacyAccepted: true,
+          termsVersion: 'v1',
+          privacyVersion: 'v1',
         });
         const pending = res as RegisterPendingResponse;
         if (pending.pendingLocalProfile && pending.requireEmailVerification) {
@@ -79,7 +91,13 @@ const LoginForm: React.FC = () => {
           window.location.href = `/verify?email=${encodeURIComponent(em)}`;
           return;
         }
+        if (hasSession(res)) {
+          applySession(res as any);
+          window.location.href = '/onboarding';
+          return;
+        }
         await login(phone || email, password);
+        window.location.href = '/onboarding';
 
       } catch (err: unknown) {
         setError(getErrorMessage(err, 'Error occurred during sign up.'));
@@ -87,14 +105,15 @@ const LoginForm: React.FC = () => {
       return;
     }
 
+    const loginIdentifier = (email || phone).trim();
     try {
       // Allow login with either phone or email
-      const loginIdentifier = email || phone;
       if (!loginIdentifier) {
         setError('Please enter your phone number or email');
         return;
       }
       await login(loginIdentifier, password);
+      window.location.href = '/home';
     } catch (err: unknown) {
       if (isPlatformApiError(err) && err.body.requireEmailVerification) {
         const em = String(err.body.email || (loginIdentifier.includes('@') ? loginIdentifier : email.trim()));
@@ -105,18 +124,7 @@ const LoginForm: React.FC = () => {
         }
         return;
       }
-      const message = getErrorMessage(err, '');
-      const msg = message.toLowerCase();
-      if (msg.includes('verif') || msg.includes('confirm') || msg.includes('email not')) {
-        const id = loginIdentifier.includes('@') ? loginIdentifier : email.trim();
-        if (id.includes('@')) {
-          window.location.href = `/verify?email=${encodeURIComponent(id)}`;
-        } else {
-          window.location.href = '/verify';
-        }
-        return;
-      }
-      setError(getErrorMessage(err, 'Invalid credentials. Please try again.'));
+      setError(getErrorMessage(err, 'Login failed (401). Check your identifier and password.'));
     }
   };
 
