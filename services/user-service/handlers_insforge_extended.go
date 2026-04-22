@@ -143,7 +143,7 @@ func syncOAuthUserFromExchange(resp map[string]any) error {
 		ID:                  id,
 		FullName:            name,
 		PhoneE164:           phone,
-		AuthEmail:           makeAuthEmail(phone),
+		AuthEmail:           email,
 		ContactEmail:        email,
 		InsforgeEmail:       email,
 		InsforgeUserID:      id,
@@ -227,12 +227,6 @@ func profilePatchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := bearerToken(r)
-	if strings.HasPrefix(token, "dev-token-") {
-		respond(w, http.StatusBadRequest, map[string]any{
-			"error": "PATCH /auth/profile requires an InsForge access token (dev-token sessions have no InsForge profile)",
-		})
-		return
-	}
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
