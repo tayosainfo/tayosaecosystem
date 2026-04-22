@@ -27,10 +27,27 @@ COPY <<'EOF' /app/start.sh
 # Fall back to 8080 for local docker runs.
 GATEWAY_PORT="${PORT:-8080}"
 
-PORT=8081 ./user-server &
-PORT=8015 ./object-server &
+# Pass InsForge credentials explicitly so every sub-process has them,
+# regardless of how the shell inherits env vars.
+INSFORGE_BASE_URL="${INSFORGE_BASE_URL:-https://74qj9u5z.us-east.insforge.app}"
+INSFORGE_ANON_KEY="${INSFORGE_ANON_KEY:-}"
+INSFORGE_STORAGE_BUCKET="${INSFORGE_STORAGE_BUCKET:-collateral_docs}"
+DATABASE_URL="${DATABASE_URL:-}"
+
+PORT=8081 \
+  INSFORGE_BASE_URL="$INSFORGE_BASE_URL" \
+  INSFORGE_ANON_KEY="$INSFORGE_ANON_KEY" \
+  DATABASE_URL="$DATABASE_URL" \
+  ./user-server &
+
+PORT=8015 \
+  INSFORGE_BASE_URL="$INSFORGE_BASE_URL" \
+  INSFORGE_ANON_KEY="$INSFORGE_ANON_KEY" \
+  INSFORGE_STORAGE_BUCKET="$INSFORGE_STORAGE_BUCKET" \
+  ./object-server &
+
 sleep 2
-PORT=${GATEWAY_PORT} \
+PORT="${GATEWAY_PORT}" \
   USER_SERVICE_URL=http://localhost:8081 \
   OBJECT_STORAGE_SERVICE_URL=http://localhost:8015 \
   exec ./gateway
