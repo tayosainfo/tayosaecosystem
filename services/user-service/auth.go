@@ -15,6 +15,8 @@ type authResult struct {
 	UserID string
 }
 
+// authFromRequest validates the Bearer token by calling InsForge.
+// dev-token-* and local fallbacks have been removed — InsForge is required.
 func authFromRequest(r *http.Request) (authResult, error) {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(auth, "Bearer ") {
@@ -25,28 +27,20 @@ func authFromRequest(r *http.Request) (authResult, error) {
 		return authResult{}, errors.New("missing bearer token")
 	}
 
-	if strings.HasPrefix(token, "dev-token-") {
-		uid := strings.TrimPrefix(token, "dev-token-")
-		if _, ok := activeStore.FindByUserID(uid); ok {
-			return authResult{UserID: uid}, nil
-		}
+	if !insforgeConfigured() {
+		return authResult{}, errors.New("auth backend not configured")
+	}
+
+	sess, _, err := insforgeUserGet("/api/auth/sessions/current", token)
+	if err != nil {
 		return authResult{}, errors.New("invalid or expired session")
 	}
-
-	if insforgeConfigured() {
-		sess, _, err := insforgeUserGet("/api/auth/sessions/current", token)
-		if err != nil {
-			return authResult{}, errors.New("invalid or expired session")
-		}
-		userObj, _ := sess["user"].(map[string]any)
-		id := mapGetString(userObj, "id")
-		if id == "" {
-			return authResult{}, errors.New("invalid session")
-		}
-		return authResult{UserID: id}, nil
+	userObj, _ := sess["user"].(map[string]any)
+	id := mapGetString(userObj, "id")
+	if id == "" {
+		return authResult{}, errors.New("invalid session")
 	}
-
-	return authResult{}, errors.New("invalid or unsupported token")
+	return authResult{UserID: id}, nil
 }
 
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {

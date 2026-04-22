@@ -28,15 +28,9 @@ func normalizeEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
-func makeAuthEmail(phoneE164 string) string {
-	digits := strings.TrimPrefix(phoneE164, "+")
-	return digits + "@tayosa.local"
-}
-
+// insforgeLoginEmail returns the email used to authenticate with InsForge.
+// Email is now always the real contact email — phone aliases have been removed.
 func insforgeLoginEmail(u User) string {
-	if u.InsforgeEmail != "" {
-		return u.InsforgeEmail
-	}
 	if u.ContactEmail != "" {
 		return u.ContactEmail
 	}

@@ -140,6 +140,7 @@ const ForgotPassword: React.FC = () => {
             <div className="mt-4 text-center">
               <button
                 type="button"
+                onClick={() => (window.location.href = '/')}
                 className="text-blue-200 hover:text-white transition-colors text-sm"
               >
                 <ArrowLeft className="h-4 w-4 inline mr-1" />

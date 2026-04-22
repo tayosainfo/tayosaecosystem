@@ -88,20 +88,40 @@ func lookupUserByEmailKey(email string) (User, bool) {
 
 func registerHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		FullName    string `json:"fullName"`
-		Phone       string `json:"phone"`
-		Email       string `json:"email"`
-		Password    string `json:"password"`
-		DateOfBirth string `json:"dateOfBirth"`
-		Nationality string `json:"nationality"`
-		ReferralCode string `json:"referralCode"`
-		TermsAccepted bool `json:"termsAccepted"`
-		PrivacyAccepted bool `json:"privacyAccepted"`
-		TermsVersion string `json:"termsVersion"`
-		PrivacyVersion string `json:"privacyVersion"`
+		FullName        string `json:"fullName"`
+		Phone           string `json:"phone"`
+		Email           string `json:"email"`
+		Password        string `json:"password"`
+		DateOfBirth     string `json:"dateOfBirth"`
+		Nationality     string `json:"nationality"`
+		ReferralCode    string `json:"referralCode"`
+		TermsAccepted   bool   `json:"termsAccepted"`
+		PrivacyAccepted bool   `json:"privacyAccepted"`
+		TermsVersion    string `json:"termsVersion"`
+		PrivacyVersion  string `json:"privacyVersion"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	contactEmail := normalizeEmail(req.Email)
+	if contactEmail == "" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "email is required"})
+		return
+	}
+	if req.FullName == "" || req.Password == "" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "fullName and password are required"})
+		return
+	}
+	if !req.TermsAccepted || !req.PrivacyAccepted {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "termsAccepted and privacyAccepted are required"})
+		return
+	}
+
+	phoneE164, err := normalizePhone(req.Phone)
+	if err != nil {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "phone must be in Uganda format, e.g. 0700123456 or +256700123456"})
 		return
 	}
 	dobPtr, err := parseOptionalDateOfBirth(req.DateOfBirth)
@@ -114,187 +134,86 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	phoneE164, err := normalizePhone(req.Phone)
-	if err != nil {
-		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-	contactEmail := normalizeEmail(req.Email)
-	if req.FullName == "" || req.Password == "" {
-		respond(w, http.StatusBadRequest, map[string]any{"error": "fullName and password are required"})
-		return
-	}
-	if !req.TermsAccepted || !req.PrivacyAccepted {
-		respond(w, http.StatusBadRequest, map[string]any{"error": "termsAccepted and privacyAccepted are required"})
-		return
-	}
-
-	if insforgeConfigured() && contactEmail == "" {
-		respond(w, http.StatusBadRequest, map[string]any{
-			"error": "email is required so InsForge can deliver verification and password-reset codes",
-		})
-		return
-	}
 
 	if _, exists := activeStore.FindByPhone(phoneE164); exists {
-		respond(w, http.StatusConflict, map[string]any{"error": "phone already registered"})
+		respond(w, http.StatusConflict, map[string]any{"error": "phone number already registered"})
 		return
 	}
-	if contactEmail != "" {
-		if _, exists := activeStore.FindByEmailKey(contactEmail); exists {
-			respond(w, http.StatusConflict, map[string]any{"error": "email already registered"})
+	if _, exists := activeStore.FindByEmailKey(contactEmail); exists {
+		respond(w, http.StatusConflict, map[string]any{"error": "email already registered"})
+		return
+	}
+
+	if !insforgeConfigured() {
+		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "auth backend not configured"})
+		return
+	}
+
+	// Register with InsForge using the real email address.
+	signupResp, _, err := insforgePostWithQuery("/api/auth/users", clientTypeQuery(r), map[string]any{
+		"email":    contactEmail,
+		"password": req.Password,
+		"name":     req.FullName,
+	})
+	if err != nil {
+		var ifErr *InsforgeRequestError
+		if errors.As(err, &ifErr) && ifErr.Status == http.StatusConflict {
+			respond(w, http.StatusConflict, map[string]any{"error": ifErr.Message})
 			return
+		}
+		code, msg := insforgeUpstreamHTTP(err)
+		respond(w, code, map[string]any{"error": msg})
+		return
+	}
+
+	ifUserID := extractInsForgeSignupUserID(signupResp)
+	if ifUserID == "" && insforgeAdminConfigured() {
+		if id, aerr := insforgeAdminFindUserIDByEmail(contactEmail); aerr == nil && id != "" {
+			ifUserID = id
 		}
 	}
 
-	authEmail := makeAuthEmail(phoneE164)
-	insforgeMail := contactEmail
-	if insforgeMail == "" {
-		insforgeMail = authEmail
+	// Email verification is required — profile will be completed after /verify.
+	needsVerify := mapGetBool(signupResp, "requireEmailVerification") || !insforgeSignupHasAccessToken(signupResp)
+
+	if needsVerify && insforgeAdminConfigured() {
+		_, _, sendErr := insforgePostEmailSendVerification(clientTypeQuery(r), map[string]any{"email": contactEmail})
+		if sendErr != nil {
+			log.Printf("user-service: post-signup send-verification for %s failed: %v", contactEmail, sendErr)
+		} else {
+			log.Printf("user-service: post-signup verification email triggered for %s", contactEmail)
+		}
 	}
 
-	if insforgeConfigured() {
-		signupResp, _, err := insforgePostWithQuery("/api/auth/users", clientTypeQuery(r), map[string]any{
-			"email":    insforgeMail,
-			"password": req.Password,
-			"name":     req.FullName,
-		})
-		if err != nil {
-			var ifErr *InsforgeRequestError
-			if errors.As(err, &ifErr) && ifErr.Status == http.StatusConflict {
-				respond(w, http.StatusConflict, map[string]any{"error": ifErr.Message})
-				return
-			}
-			code, msg := insforgeUpstreamHTTP(err)
-			respond(w, code, map[string]any{"error": msg})
-			return
-		}
-
-		ifUserID := extractInsForgeSignupUserID(signupResp)
-		if ifUserID == "" && insforgeAdminConfigured() {
-			if id, aerr := insforgeAdminFindUserIDByEmail(insforgeMail); aerr == nil && id != "" {
-				ifUserID = id
-			}
-		}
-		if ifUserID == "" {
-			probe, _, _ := insforgePostAnonAnyHTTPStatus("/api/auth/sessions", clientTypeQuery(r), map[string]any{
-				"email":    insforgeMail,
-				"password": req.Password,
+	if ifUserID == "" {
+		// InsForge requires email verification before revealing the user ID.
+		if needsVerify {
+			// Store pending profile data so /verify-email can finish creating the local record.
+			respond(w, http.StatusCreated, map[string]any{
+				"requireEmailVerification": true,
+				"pendingLocalProfile":      true,
+				"email":                    contactEmail,
+				"message":                  "Check your email for a 6-digit verification code.",
 			})
-			if id := extractInsForgeSignupUserID(probe); id != "" {
-				ifUserID = id
-			}
-		}
-		if ifUserID == "" {
-			needsVerify := mapGetBool(signupResp, "requireEmailVerification") || !insforgeSignupHasAccessToken(signupResp)
-			if needsVerify {
-				// Explicitly trigger verification email — InsForge may not auto-send after signup.
-				if insforgeAdminConfigured() {
-					_, _, sendErr := insforgePostEmailSendVerification(clientTypeQuery(r), map[string]any{"email": insforgeMail})
-					if sendErr != nil {
-						log.Printf("user-service: post-signup send-verification for %s failed: %v", insforgeMail, sendErr)
-					} else {
-						log.Printf("user-service: post-signup verification email triggered for %s", insforgeMail)
-					}
-				} else {
-					log.Printf("user-service: INSFORGE_ADMIN_API_KEY not set — cannot send post-signup verification email for %s", insforgeMail)
-				}
-				respond(w, http.StatusCreated, map[string]any{
-					"requireEmailVerification": true,
-					"pendingLocalProfile":      true,
-					"email":                    insforgeMail,
-					"message":                  "InsForge created your account. Check your email for the verification code, then return here or use Verify Email. After verifying, submit the same phone and password once on the verify page to finish your Tayosa profile.",
-				})
-				return
-			}
-			payload := map[string]any{
-				"error":                "InsForge sign-up response missing user id",
-				"hint":                 "Some InsForge responses omit user.id. Set INSFORGE_ADMIN_API_KEY (project admin) for lookup, or inspect insforgeResponseKeys. If email verification is on, you should still have received a 201 pending response — contact support with these keys.",
-				"insforgeResponseKeys": topLevelJSONKeys(signupResp),
-			}
-			respond(w, http.StatusBadGateway, payload)
 			return
 		}
-
-		u := User{
-			ID:             ifUserID,
-			FullName:       req.FullName,
-			PhoneE164:      phoneE164,
-			AuthEmail:      authEmail,
-			ContactEmail:   contactEmail,
-			InsforgeEmail:  insforgeMail,
-			InsforgeUserID: ifUserID,
-			DateOfBirth:    dobPtr,
-			Nationality:    nationality,
-			CreatedAt:      time.Now(),
-		}
-		ob := OnboardingProfile{
-			UserID:         u.ID,
-			Phase:          1,
-			TrustScoreSeed: 10,
-			LastUpdatedAt:  time.Now(),
-		}
-		if err := activeStore.CreateIdentityWithOnboarding(u, ob, nil); err != nil {
-			if isUniqueViolation(err) {
-				respond(w, http.StatusConflict, map[string]any{"error": "identity already exists"})
-				return
-			}
-			respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		now := time.Now()
-		_ = activeStore.UpsertUserConsents(UserConsents{
-			UserID:            u.ID,
-			TermsAcceptedAt:   &now,
-			PrivacyAcceptedAt: &now,
-			TermsVersion:      strings.TrimSpace(req.TermsVersion),
-			PrivacyVersion:    strings.TrimSpace(req.PrivacyVersion),
-		})
-		code := referralCodeForUserID(u.ID)
-		_ = activeStore.SetUserReferralCode(u.ID, code)
-		if refCode := strings.TrimSpace(req.ReferralCode); refCode != "" {
-			if referrerID, ok := activeStore.FindUserIDByReferralCode(refCode); ok && referrerID != u.ID {
-				createAffiliateReferral(refCode, referrerID, u.ID)
-			}
-			ob.ReferralCode = refCode
-			_ = activeStore.UpsertOnboarding(ob)
-		}
-		emitAudit(u.ID, "register", "user", "account created")
-		if u.ContactEmail != "" {
-			emitNotification("email", u.ContactEmail, "welcome_account_created")
-		}
-
-		// If InsForge requires email verification, explicitly trigger sending the code.
-		needsVerify := mapGetBool(signupResp, "requireEmailVerification") || !insforgeSignupHasAccessToken(signupResp)
-		if needsVerify && insforgeAdminConfigured() {
-			_, _, sendErr := insforgePostEmailSendVerification(clientTypeQuery(r), map[string]any{"email": insforgeMail})
-			if sendErr != nil {
-				log.Printf("user-service: post-signup send-verification for %s failed: %v", insforgeMail, sendErr)
-			} else {
-				log.Printf("user-service: post-signup verification email triggered for %s", insforgeMail)
-			}
-		}
-
-		respond(w, http.StatusCreated, map[string]any{
-			"user":                     userPublicProfile(u),
-			"session":                  sessionPayloadFromInsForge(signupResp, u.ID),
-			"requireEmailVerification": needsVerify,
-			"referralCode":             code,
+		respond(w, http.StatusBadGateway, map[string]any{
+			"error": "InsForge signup response missing user id",
 		})
 		return
 	}
 
 	u := User{
-		ID:            "usr_" + strings.ReplaceAll(strings.TrimPrefix(phoneE164, "+"), " ", ""),
-		FullName:      req.FullName,
-		PhoneE164:     phoneE164,
-		AuthEmail:     authEmail,
-		ContactEmail:  contactEmail,
-		InsforgeEmail: insforgeMail,
-		DateOfBirth:   dobPtr,
-		Nationality:   nationality,
-		Password:      req.Password,
-		CreatedAt:     time.Now(),
+		ID:             ifUserID,
+		FullName:       req.FullName,
+		PhoneE164:      phoneE164,
+		AuthEmail:      contactEmail,
+		ContactEmail:   contactEmail,
+		InsforgeEmail:  contactEmail,
+		InsforgeUserID: ifUserID,
+		DateOfBirth:    dobPtr,
+		Nationality:    nationality,
+		CreatedAt:      time.Now(),
 	}
 	ob := OnboardingProfile{
 		UserID:         u.ID,
@@ -302,20 +221,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		TrustScoreSeed: 10,
 		LastUpdatedAt:  time.Now(),
 	}
-
-	var passHash *string
-	if usesPostgres() {
-		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-		if err != nil {
-			respond(w, http.StatusInternalServerError, map[string]any{"error": "could not hash password"})
-			return
-		}
-		s := string(hash)
-		passHash = &s
-		u.Password = ""
-	}
-
-	if err := activeStore.CreateIdentityWithOnboarding(u, ob, passHash); err != nil {
+	if err := activeStore.CreateIdentityWithOnboarding(u, ob, nil); err != nil {
 		if isUniqueViolation(err) {
 			respond(w, http.StatusConflict, map[string]any{"error": "identity already exists"})
 			return
@@ -331,33 +237,26 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		TermsVersion:      strings.TrimSpace(req.TermsVersion),
 		PrivacyVersion:    strings.TrimSpace(req.PrivacyVersion),
 	})
-	code := referralCodeForUserID(u.ID)
-	_ = activeStore.SetUserReferralCode(u.ID, code)
-	if refCode := strings.TrimSpace(req.ReferralCode); refCode != "" {
-		if referrerID, ok := activeStore.FindUserIDByReferralCode(refCode); ok && referrerID != u.ID {
-			createAffiliateReferral(refCode, referrerID, u.ID)
+	refCode := referralCodeForUserID(u.ID)
+	_ = activeStore.SetUserReferralCode(u.ID, refCode)
+	if rc := strings.TrimSpace(req.ReferralCode); rc != "" {
+		if referrerID, ok := activeStore.FindUserIDByReferralCode(rc); ok && referrerID != u.ID {
+			createAffiliateReferral(rc, referrerID, u.ID)
 		}
-		ob.ReferralCode = refCode
+		ob.ReferralCode = rc
 		_ = activeStore.UpsertOnboarding(ob)
 	}
 	emitAudit(u.ID, "register", "user", "account created")
-	if u.ContactEmail != "" {
-		emitNotification("email", u.ContactEmail, "welcome_account_created")
-	}
+	emitNotification("email", u.ContactEmail, "welcome_account_created")
 
-	if !usesPostgres() {
-		devMapsMu.Lock()
-		devVerifyCodes[u.InsforgeEmail] = "123456"
-		devMapsMu.Unlock()
-	}
-
-	token := "dev-token-" + u.ID
 	respond(w, http.StatusCreated, map[string]any{
-		"user":    userPublicProfile(u),
-		"session": map[string]any{"accessToken": token, "userId": u.ID},
-		"referralCode": code,
+		"user":                     userPublicProfile(u),
+		"session":                  sessionPayloadFromInsForge(signupResp, u.ID),
+		"requireEmailVerification": needsVerify,
+		"referralCode":             refCode,
 	})
 }
+
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -370,171 +269,96 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identifier := strings.TrimSpace(req.Identifier)
-	var user User
-	var found bool
+	if identifier == "" || req.Password == "" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "email and password are required"})
+		return
+	}
 
+	// Resolve identifier to an InsForge email.
+	// Email is always the primary credential; phone is accepted as a lookup convenience.
+	loginEmail := ""
 	if strings.Contains(identifier, "@") {
-		email := normalizeEmail(identifier)
-		user, found = activeStore.FindByEmailKey(email)
+		loginEmail = normalizeEmail(identifier)
 	} else {
 		if phone, err := normalizePhone(identifier); err == nil {
-			user, found = activeStore.FindByPhone(phone)
+			if u, ok := activeStore.FindByPhone(phone); ok {
+				loginEmail = insforgeLoginEmail(u)
+			}
+		}
+	}
+
+	if loginEmail == "" {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid email or password"})
+		return
+	}
+
+	if !insforgeConfigured() {
+		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "auth backend not configured"})
+		return
+	}
+
+	sessionResp, _, err := insforgePostWithQuery("/api/auth/sessions", clientTypeQuery(r), map[string]any{
+		"email":    loginEmail,
+		"password": req.Password,
+	})
+	if err != nil {
+		var ifErr *InsforgeRequestError
+		if errors.As(err, &ifErr) {
+			if ifErr.Status == http.StatusTooManyRequests {
+				respond(w, http.StatusTooManyRequests, map[string]any{"error": ifErr.Message})
+				return
+			}
+			payload := map[string]any{"error": ifErr.Message}
+			if insforgeIndicatesEmailNotVerified(ifErr.Status, ifErr.Message) {
+				payload["requireEmailVerification"] = true
+				payload["email"] = loginEmail
+				st := ifErr.Status
+				if st == http.StatusUnauthorized {
+					st = http.StatusForbidden
+				}
+				respond(w, st, payload)
+				return
+			}
+			respond(w, ifErr.Status, payload)
+			return
+		}
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid email or password"})
+		return
+	}
+
+	// Sync InsForge user ID back to the local TAYOSA profile.
+	ifUserObj, _ := sessionResp["user"].(map[string]any)
+	ifUserID := mapGetString(ifUserObj, "id")
+
+	user, found := activeStore.FindByEmailKey(loginEmail)
+	if found && ifUserID != "" {
+		user.InsforgeUserID = ifUserID
+		user.ID = ifUserID
+		_ = activeStore.UpdateIdentity(user)
+		if refreshed, ok := activeStore.FindByUserID(ifUserID); ok {
+			user = refreshed
 		}
 	}
 
 	if !found {
-		if insforgeConfigured() && strings.Contains(identifier, "@") {
-			emailTry := normalizeEmail(identifier)
-			if emailTry != "" {
-				_, _, err := insforgePostWithQuery("/api/auth/sessions", clientTypeQuery(r), map[string]any{
-					"email":    emailTry,
-					"password": req.Password,
-				})
-				if err != nil {
-					var ifErr *InsforgeRequestError
-					if errors.As(err, &ifErr) {
-						if ifErr.Status == http.StatusTooManyRequests {
-							respond(w, http.StatusTooManyRequests, map[string]any{"error": ifErr.Message})
-							return
-						}
-						if ifErr.Status >= 500 {
-							respond(w, ifErr.Status, map[string]any{"error": ifErr.Message})
-							return
-						}
-						if ifErr.Status >= 400 {
-							payload := map[string]any{"error": ifErr.Message}
-							if insforgeIndicatesEmailNotVerified(ifErr.Status, ifErr.Message) {
-								payload["requireEmailVerification"] = true
-								payload["email"] = emailTry
-								st := ifErr.Status
-								if st == http.StatusUnauthorized {
-									st = http.StatusForbidden
-								}
-								respond(w, st, payload)
-								return
-							}
-							respond(w, ifErr.Status, payload)
-							return
-						}
-					}
-				}
-			}
-		}
-		respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email. If you have not verified your email yet, sign in with the same email you used at registration."})
-		return
-	}
-
-	if insforgeConfigured() {
-		sessionResp, _, err := insforgePostWithQuery("/api/auth/sessions", clientTypeQuery(r), map[string]any{
-			"email":    insforgeLoginEmail(user),
-			"password": req.Password,
-		})
-		if err != nil {
-			var ifErr *InsforgeRequestError
-			if errors.As(err, &ifErr) {
-				if ifErr.Status == http.StatusTooManyRequests {
-					respond(w, http.StatusTooManyRequests, map[string]any{"error": ifErr.Message})
-					return
-				}
-				if ifErr.Status >= 500 {
-					respond(w, ifErr.Status, map[string]any{"error": ifErr.Message})
-					return
-				}
-				if ifErr.Status >= 400 {
-					// Backward-compatibility path:
-					// Some existing users were created before InsForge-backed auth and only
-					// have local credentials in users_identity. If InsForge rejects, fall
-					// back to local password verification for those records.
-					if user.PasswordHash != "" || user.Password != "" {
-						if user.PasswordHash != "" {
-							if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-								respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
-								return
-							}
-						} else if user.Password != req.Password {
-							respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
-							return
-						}
-						respond(w, http.StatusOK, map[string]any{
-							"session": map[string]any{
-								"accessToken": "dev-token-" + user.ID,
-								"userId":      user.ID,
-							},
-							"user": userPublicProfile(user),
-						})
-						return
-					}
-					payload := map[string]any{"error": ifErr.Message}
-					if insforgeIndicatesEmailNotVerified(ifErr.Status, ifErr.Message) {
-						payload["requireEmailVerification"] = true
-						payload["email"] = insforgeLoginEmail(user)
-						st := ifErr.Status
-						if st == http.StatusUnauthorized {
-							st = http.StatusForbidden
-						}
-						respond(w, st, payload)
-						return
-					}
-					respond(w, ifErr.Status, payload)
-					return
-				}
-			}
-			if user.PasswordHash != "" || user.Password != "" {
-				if user.PasswordHash != "" {
-					if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-						respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
-						return
-					}
-				} else if user.Password != req.Password {
-					respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
-					return
-				}
-				respond(w, http.StatusOK, map[string]any{
-					"session": map[string]any{
-						"accessToken": "dev-token-" + user.ID,
-						"userId":      user.ID,
-					},
-					"user": userPublicProfile(user),
-				})
-				return
-			}
-			respond(w, http.StatusUnauthorized, map[string]any{"error": err.Error()})
-			return
-		}
-		userObj, _ := sessionResp["user"].(map[string]any)
-		if id := mapGetString(userObj, "id"); id != "" {
-			user.InsforgeUserID = id
-			user.ID = id
-		}
-		_ = activeStore.UpdateIdentity(user)
-		if refreshed, ok := activeStore.FindByUserID(user.ID); ok {
-			user = refreshed
-		}
+		// InsForge login succeeded but no local TAYOSA profile yet.
 		respond(w, http.StatusOK, map[string]any{
-			"session": sessionPayloadFromInsForge(sessionResp, user.ID),
-			"user":    userPublicProfile(user),
+			"session": sessionPayloadFromInsForge(sessionResp, ifUserID),
+			"user": map[string]any{
+				"id":           ifUserID,
+				"fullName":     mapGetString(ifUserObj, "name"),
+				"contactEmail": loginEmail,
+			},
 		})
-		return
-	}
-
-	if user.PasswordHash != "" {
-		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-			respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
-			return
-		}
-	} else if user.Password != req.Password {
-		respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid credentials. Use your registered phone number or email."})
 		return
 	}
 
 	respond(w, http.StatusOK, map[string]any{
-		"session": map[string]any{
-			"accessToken": "dev-token-" + user.ID,
-			"userId":      user.ID,
-		},
-		"user": userPublicProfile(user),
+		"session": sessionPayloadFromInsForge(sessionResp, user.ID),
+		"user":    userPublicProfile(user),
 	})
 }
+
 
 func resendVerificationHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -694,7 +518,7 @@ func verifyEmailHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		authEmail := makeAuthEmail(phoneE164)
+		authEmail := email
 		u := User{
 			ID:             ifUserID,
 			FullName:       strings.TrimSpace(req.FullName),
@@ -736,20 +560,9 @@ func verifyEmailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devMapsMu.Lock()
-	expected := devVerifyCodes[target]
-	if expected == "" || req.OTP != expected {
-		devMapsMu.Unlock()
-		respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid verification code"})
-		return
-	}
-	delete(devVerifyCodes, target)
-	devMapsMu.Unlock()
-	respond(w, http.StatusOK, map[string]any{
-		"accessToken": "dev-token-verified-" + strings.ReplaceAll(email, "@", "_"),
-		"user":        map[string]any{"email": email, "emailVerified": true},
-	})
+	respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid verification code"})
 }
+
 
 func sendResetPasswordEmailHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
