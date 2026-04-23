@@ -299,6 +299,14 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get the user's JWT token from the Authorization header
+	// We need to forward this to Supabase so RLS policies can check auth.uid()
+	userToken := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(userToken, "Bearer ") {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing bearer token"})
+		return
+	}
+
 	// Build folder-based path: {user_id}/{category}/{timestamp}-{filename}
 	// This enables folder-based RLS policies for better security
 	objectPath := fmt.Sprintf("%s/%s/%s-%s",
@@ -316,8 +324,14 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	req.Header.Set("Authorization", serviceBearer)
+	// CRITICAL: Use the user's JWT token, not the anon key
+	// This allows Supabase RLS policies to check auth.uid()
+	req.Header.Set("Authorization", userToken)
 	req.Header.Set("Content-Type", contentType)
+	// Supabase also requires the apikey header
+	if anonKey := strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")); anonKey != "" {
+		req.Header.Set("apikey", anonKey)
+	}
 	req.Header.Set("x-upsert", "true")
 	req.ContentLength = header.Size
 
