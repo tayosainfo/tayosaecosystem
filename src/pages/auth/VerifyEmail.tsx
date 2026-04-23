@@ -25,8 +25,20 @@ export const VerifyEmail: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get('email');
-    if (q) setEmail(q);
+    const params = new URLSearchParams(window.location.search);
+    const emailParam = params.get('email');
+    const tokenParam = params.get('token');
+    const tokenHashParam = params.get('token_hash');
+    
+    if (emailParam) setEmail(emailParam);
+    
+    // Auto-extract token from URL if user clicked email link
+    if (tokenParam) {
+      setOtp(tokenParam);
+    } else if (tokenHashParam) {
+      // Supabase sometimes uses token_hash instead
+      setOtp(tokenHashParam);
+    }
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -138,15 +138,19 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register with Supabase using OTP verification method
+	// Register with Supabase using email OTP verification
 	// Note: Supabase only accepts email OR phone, not both. We use email for auth
 	// and store phone separately in our local database and user metadata.
+	// First, create the user with password
 	signupResp, _, err := supabasePostWithQuery("/auth/v1/signup", clientTypeQuery(r), map[string]any{
 		"email":    contactEmail,
 		"password": req.Password,
 		"data": map[string]any{
 			"name":  req.FullName,
 			"phone": phoneE164,
+		},
+		"options": map[string]any{
+			"email_redirect_to": "https://tayosaecosystem.vercel.app/verify",
 		},
 	})
 	if err != nil {
@@ -167,21 +171,9 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Send OTP for email verification
+	// Check if email verification is needed
 	needsVerify := !supabaseSignupHasAccessToken(signupResp)
-	if needsVerify && supabaseConfigured() {
-		// Send OTP using the dedicated OTP endpoint
-		_, _, otpErr := supabasePostWithQuery("/auth/v1/otp", clientTypeQuery(r), map[string]any{
-			"email": contactEmail,
-			"type":  "signup",
-		})
-		if otpErr != nil {
-			log.Printf("user-service: OTP send failed for %s: %v", contactEmail, otpErr)
-		} else {
-			log.Printf("user-service: OTP sent successfully for %s", contactEmail)
-		}
-	}
-
+	
 	if ifUserID == "" {
 		// Supabase requires email verification before revealing the user ID.
 		if needsVerify {
