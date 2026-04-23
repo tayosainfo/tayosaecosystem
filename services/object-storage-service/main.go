@@ -249,13 +249,6 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Gate: caller must present a bearer (validated by gateway), but we use
-	// our own service credential when talking to Supabase.
-	if !hasCallerBearer(r) {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing bearer token"})
-		return
-	}
-
 	serviceBearer, ok := supabaseServiceBearer()
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
@@ -376,7 +369,7 @@ func main() {
 		})
 	})
 
-	mux.HandleFunc("/api/v1/storage/upload", handleUpload)
+	mux.HandleFunc("/api/v1/storage/upload", requireAuth(handleUpload))
 
 	log.Printf("Object Storage Service listening on :%s", port)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
