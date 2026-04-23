@@ -59,8 +59,8 @@ func (m *MemoryStore) indexUser(u User) {
 	if u.ContactEmail != "" {
 		m.usersByEmail[u.ContactEmail] = u
 	}
-	if u.InsforgeEmail != "" {
-		m.usersByEmail[u.InsforgeEmail] = u
+	if u.SupabaseLoginEmail != "" {
+		m.usersByEmail[u.SupabaseLoginEmail] = u
 	}
 }
 

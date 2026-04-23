@@ -14,7 +14,7 @@ func allowCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Request-Id, X-CSRF-Token, X-Admin-Secret")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -59,15 +59,15 @@ func main() {
 	initStore()
 	defer activeStore.Close()
 
-	if insforgeConfigured() {
-		log.Printf("user-service: InsForge auth enabled (%s)", insforgeBaseURL())
-		if insforgeAdminConfigured() {
-			log.Print("user-service: INSFORGE_ADMIN_API_KEY is set (send-verification will use anon Bearer + x-api-key)")
+	if supabaseConfigured() {
+		log.Printf("user-service: Supabase auth enabled (%s)", supabaseBaseURL())
+		if supabaseServiceRoleConfigured() {
+			log.Print("user-service: SUPABASE_SERVICE_ROLE_KEY is set (admin operations available)")
 		} else {
-			log.Print("user-service: INSFORGE_ADMIN_API_KEY not set — send-verification may fail; set project API key (ik_...) in .env")
+			log.Print("user-service: SUPABASE_SERVICE_ROLE_KEY not set — admin user lookup disabled")
 		}
 	} else {
-		log.Print("user-service: InsForge auth disabled (set INSFORGE_BASE_URL and INSFORGE_ANON_KEY for live codes)")
+		log.Print("user-service: Supabase auth disabled (set SUPABASE_URL and SUPABASE_ANON_KEY)")
 	}
 
 	mux := http.NewServeMux()
@@ -77,10 +77,10 @@ func main() {
 			"service": "user-service",
 			"time":    time.Now().Format(time.RFC3339),
 		}
-		if insforgeConfigured() {
-			payload["insforge"] = map[string]any{
-				"baseUrl":        insforgeBaseURL(),
-				"adminKeyLoaded": insforgeAdminConfigured(),
+		if supabaseConfigured() {
+			payload["supabase"] = map[string]any{
+				"baseUrl":            supabaseBaseURL(),
+				"serviceRoleLoaded":  supabaseServiceRoleConfigured(),
 			}
 		}
 		respond(w, http.StatusOK, payload)

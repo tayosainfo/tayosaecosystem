@@ -2,7 +2,7 @@ package main
 
 import "sync"
 
-// In-memory OTP / reset state when InsForge is disabled (dev only).
+// In-memory OTP / reset state when Supabase is disabled (dev only).
 var (
 	devMapsMu      sync.Mutex
 	devVerifyCodes = map[string]string{}

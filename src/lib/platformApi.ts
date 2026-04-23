@@ -44,7 +44,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
 
-/** Match InsForge web SDK: anon auth routes often expect client_type=web for cookies / token behavior. */
+/** Match Supabase web SDK: anon auth routes often expect client_type=web for cookies / token behavior. */
 function withAuthClientType(path: string): string {
   if (!path.startsWith('/api/v1/auth') || path.includes('client_type=')) {
     return path;
@@ -234,7 +234,7 @@ export const platformApi = {
 
   /**
    * Upload a file to the object-storage-service, which proxies the bytes
-   * directly to InsForge storage. Returns the storage key for use in KYC
+   * directly to Supabase storage. Returns the storage key for use in KYC
    * and other document references.
    *
    * NOTE: Do NOT pass Content-Type in the headers — the browser must set it

@@ -24,8 +24,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
       _error = null;
     });
     try {
-      final api = ref.read(apiClientProvider);
-      await api.post('/api/v1/auth/send-reset-password-email', data: {'email': _email.text.trim()});
+      final apiClient = ref.read(apiClientInstanceProvider);
+      await apiClient.requestPasswordReset(email: _email.text.trim());
       setState(() => _codeSent = true);
     } catch (e) {
       setState(() => _error = 'Failed to send reset code');

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -25,38 +26,152 @@ func trimBase(s string) string {
 	return strings.TrimRight(strings.TrimSpace(s), "/")
 }
 
-func insforgeBaseURL() string {
-	b := strings.TrimSpace(os.Getenv("INSFORGE_BASE_URL"))
+func supabaseBaseURL() string {
+	b := strings.TrimSpace(os.Getenv("SUPABASE_URL"))
 	if b == "" {
-		b = "https://74qj9u5z.us-east.insforge.app"
+		b = "https://ablvrbnbsdqshrorhmjf.supabase.co"
 	}
 	return trimBase(b)
 }
 
 func storageBucket() string {
-	b := strings.TrimSpace(os.Getenv("INSFORGE_STORAGE_BUCKET"))
+	b := strings.TrimSpace(os.Getenv("SUPABASE_STORAGE_BUCKET"))
 	if b == "" {
 		return "collateral_docs"
 	}
 	return b
 }
 
-// insforgeServiceBearer returns the InsForge anon key as the service credential
-// for InsForge storage calls.
+// supabaseServiceBearer returns the Supabase anon key as the service credential
+// for Supabase storage calls.
 //
 // IMPORTANT: We NEVER forward the caller's TAYOSA token (e.g. "dev-token-<id>")
-// to InsForge. Those are internal TAYOSA tokens — InsForge will reject them.
+// to Supabase. Those are internal TAYOSA tokens — Supabase will reject them.
 // The caller has already been authenticated by the API gateway.
-func insforgeServiceBearer() (string, bool) {
-	key := strings.TrimSpace(os.Getenv("INSFORGE_ANON_KEY"))
+func supabaseServiceBearer() (string, bool) {
+	key := strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY"))
 	if key != "" {
 		return "Bearer " + key, true
 	}
 	return "", false
 }
 
+// ---------------------------------------------------------------------------
+// Supabase Token Validation
+// ---------------------------------------------------------------------------
+
+type SupabaseRequestError struct {
+	Status  int
+	Message string
+}
+
+func (e *SupabaseRequestError) Error() string {
+	return e.Message
+}
+
+func supabaseErrorMessage(body []byte, status int) string {
+	var top map[string]any
+	if json.Unmarshal(body, &top) == nil {
+		if m, ok := top["msg"].(string); ok && strings.TrimSpace(m) != "" {
+			return m
+		}
+		if m, ok := top["message"].(string); ok && strings.TrimSpace(m) != "" {
+			return m
+		}
+		if m, ok := top["error_description"].(string); ok && strings.TrimSpace(m) != "" {
+			return m
+		}
+		if s, ok := top["error"].(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	if len(body) > 0 && len(body) < 512 {
+		return strings.TrimSpace(string(body))
+	}
+	return "Supabase request failed"
+}
+
+// validateSupabaseToken validates a JWT token by calling Supabase /auth/v1/user endpoint
+func validateSupabaseToken(token string) (userID string, err error) {
+	url := supabaseBaseURL() + "/auth/v1/user"
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	if key := strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")); key != "" {
+		req.Header.Set("apikey", key)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", &SupabaseRequestError{
+			Status:  resp.StatusCode,
+			Message: supabaseErrorMessage(body, resp.StatusCode),
+		}
+	}
+
+	var user map[string]any
+	if err := json.Unmarshal(body, &user); err != nil {
+		return "", err
+	}
+
+	id, ok := user["id"].(string)
+	if !ok || id == "" {
+		return "", errors.New("invalid user response from Supabase")
+	}
+
+	return id, nil
+}
+
+// requireAuth middleware validates Bearer token before allowing request to proceed
+func requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if !strings.HasPrefix(auth, "Bearer ") {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing bearer token"})
+			return
+		}
+
+		token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		if token == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing bearer token"})
+			return
+		}
+
+		userID, err := validateSupabaseToken(token)
+		if err != nil {
+			var sbErr *SupabaseRequestError
+			if errors.As(err, &sbErr) {
+				if sbErr.Status == 401 || sbErr.Status == 403 {
+					writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid or expired session"})
+					return
+				}
+			}
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication failed"})
+			return
+		}
+
+		// Add user ID to request headers for downstream use
+		r.Header.Set("X-User-Id", userID)
+		next(w, r)
+	}
+}
+
 // hasCallerBearer confirms the incoming request carries any Bearer token,
-// so we can gate the endpoint without forwarding it to InsForge.
+// so we can gate the endpoint without forwarding it to Supabase.
 func hasCallerBearer(r *http.Request) bool {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(auth, "Bearer ") {
@@ -67,9 +182,9 @@ func hasCallerBearer(r *http.Request) bool {
 
 var httpClient = &http.Client{Timeout: 60 * time.Second}
 
-// ensureBucket creates the InsForge storage bucket if it does not yet exist.
+// ensureBucket creates the Supabase storage bucket if it does not yet exist.
 func ensureBucket(bucket, serviceBearer string) {
-	url := insforgeBaseURL() + "/storage/v1/bucket"
+	url := supabaseBaseURL() + "/storage/v1/bucket"
 
 	// Check if it exists first.
 	checkBody := strings.NewReader("")
@@ -111,7 +226,7 @@ func ensureBucket(bucket, serviceBearer string) {
 }
 
 // handleUpload accepts multipart/form-data with a "file" field and an optional
-// "category" field (defaults to "kyc"). It uploads the raw bytes to InsForge
+// "category" field (defaults to "kyc"). It uploads the raw bytes to Supabase
 // storage using the service anon key and returns {"key": "<path>"} on success.
 func handleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
@@ -125,16 +240,16 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Gate: caller must present a bearer (validated by gateway), but we use
-	// our own service credential when talking to InsForge.
+	// our own service credential when talking to Supabase.
 	if !hasCallerBearer(r) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing bearer token"})
 		return
 	}
 
-	serviceBearer, ok := insforgeServiceBearer()
+	serviceBearer, ok := supabaseServiceBearer()
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"error": "INSFORGE_ANON_KEY is not configured on this server",
+			"error": "SUPABASE_ANON_KEY is not configured on this server",
 		})
 		return
 	}
@@ -180,7 +295,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	)
 
 	bucket := storageBucket()
-	uploadURL := insforgeBaseURL() + "/storage/v1/object/" + bucket + "/" + objectPath
+	uploadURL := supabaseBaseURL() + "/storage/v1/object/" + bucket + "/" + objectPath
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, uploadURL, file)
 	if err != nil {
@@ -194,23 +309,23 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "InsForge storage unreachable: " + err.Error()})
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "Supabase storage unreachable: " + err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 300 {
-		log.Printf("InsForge storage upload failed: status=%d body=%s url=%s", resp.StatusCode, string(respBody), uploadURL)
+		log.Printf("Supabase storage upload failed: status=%d body=%s url=%s", resp.StatusCode, string(respBody), uploadURL)
 		writeJSON(w, http.StatusBadGateway, map[string]any{
-			"error":   "InsForge storage returned an error",
+			"error":   "Supabase storage returned an error",
 			"status":  resp.StatusCode,
 			"details": string(respBody),
 		})
 		return
 	}
 
-	log.Printf("InsForge storage upload OK: %s", objectPath)
+	log.Printf("Supabase storage upload OK: %s", objectPath)
 	writeJSON(w, http.StatusOK, map[string]any{"key": objectPath})
 }
 
@@ -224,10 +339,10 @@ func main() {
 	}
 
 	// Eagerly verify bucket exists at startup.
-	if bearer, ok := insforgeServiceBearer(); ok {
+	if bearer, ok := supabaseServiceBearer(); ok {
 		go ensureBucket(storageBucket(), bearer)
 	} else {
-		log.Print("WARNING: INSFORGE_ANON_KEY not set — KYC file uploads will fail")
+		log.Print("WARNING: SUPABASE_ANON_KEY not set — KYC file uploads will fail")
 	}
 
 	mux := http.NewServeMux()

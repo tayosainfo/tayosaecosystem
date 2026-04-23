@@ -33,11 +33,11 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
       _error = null;
     });
     try {
-      final api = ref.read(apiClientProvider);
-      await api.post('/api/v1/auth/reset-password', data: {
-        'newPassword': _password.text,
-        'otp': widget.token,
-      });
+      final apiClient = ref.read(apiClientInstanceProvider);
+      await apiClient.resetPassword(
+        token: widget.token,
+        newPassword: _password.text,
+      );
       if (mounted) context.go('/login');
     } catch (e) {
       if (e is DioException && e.response?.data?['error'] != null) {

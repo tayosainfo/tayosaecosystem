@@ -48,29 +48,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
 
     try {
-      final api = ref.read(apiClientProvider);
-      final response = await api.post(
-        '/api/v1/auth/login',
-        data: {
-          'identifier': identifierText,
-          'password': passwordText,
-        },
+      final apiClient = ref.read(apiClientInstanceProvider);
+      final response = await apiClient.login(
+        identifier: identifierText,
+        password: passwordText,
       );
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final prefs = await SharedPreferences.getInstance();
-        if (response.data['user'] != null) {
-          final user = response.data['user'];
-          await prefs.setString('user_id', user['id']?.toString() ?? '');
-          await prefs.setString('user_name', user['fullName'] ?? 'Member');
-          await prefs.setString('user_email', user['contactEmail'] ?? '');
-          await prefs.setString('user_phone', user['phoneE164'] ?? '');
-          await prefs.setString('auth_token', response.data['session']?['accessToken'] ?? '');
-        }
-        if (mounted) context.go('/home');
-      } else {
-        setState(() => _error = response.data['error'] ?? 'Login failed');
+      final prefs = await SharedPreferences.getInstance();
+      if (response['user'] != null) {
+        final user = response['user'];
+        await prefs.setString('user_id', user['id']?.toString() ?? '');
+        await prefs.setString('user_name', user['fullName'] ?? 'Member');
+        await prefs.setString('user_email', user['contactEmail'] ?? '');
+        await prefs.setString('user_phone', user['phoneE164'] ?? '');
+        await prefs.setString('auth_token', response['session']?['accessToken'] ?? '');
       }
+      if (mounted) context.go('/home');
     } catch (e) {
       print('Login error: $e');
       if (e is DioException && e.response?.data != null && e.response?.data['error'] != null) {

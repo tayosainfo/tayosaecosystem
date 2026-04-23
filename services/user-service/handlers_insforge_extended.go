@@ -14,8 +14,8 @@ import (
 
 var errOAuthEmailAccountMismatch = errors.New("an account with this email already exists with a different identity; sign in with password or use the same OAuth provider")
 
-func syntheticOAuthPhone(insforgeUserID string) string {
-	h := sha256.Sum256([]byte(insforgeUserID + ":tayosa-oauth-phone"))
+func syntheticOAuthPhone(supabaseUserID string) string {
+	h := sha256.Sum256([]byte(supabaseUserID + ":tayosa-oauth-phone"))
 	n := binary.BigEndian.Uint64(h[:8]) % 100000000
 	return fmt.Sprintf("+25678%07d", n)
 }
@@ -33,8 +33,8 @@ func oauthStartHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	if !insforgeConfigured() {
-		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "InsForge is not configured"})
+	if !supabaseConfigured() {
+		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "Supabase is not configured"})
 		return
 	}
 	customKey := strings.TrimSpace(r.URL.Query().Get("customKey"))
@@ -52,17 +52,17 @@ func oauthStartHandler(w http.ResponseWriter, r *http.Request) {
 	q.Set("code_challenge", challenge)
 	var path string
 	if customKey != "" {
-		path = "/api/auth/oauth/custom/" + url.PathEscape(customKey)
+		path = "/auth/v1/authorize?provider=custom:" + url.PathEscape(customKey)
 	} else {
 		if provider == "" {
 			respond(w, http.StatusBadRequest, map[string]any{"error": "provider is required unless customKey is set"})
 			return
 		}
-		path = "/api/auth/oauth/" + url.PathEscape(provider)
+		path = "/auth/v1/authorize?provider=" + url.PathEscape(provider)
 	}
-	raw, status, err := insforgeGetAnon(path, q)
+	raw, status, err := supabaseGetAnon(path, q)
 	if err != nil {
-		code, msg := insforgeUpstreamHTTP(err)
+		code, msg := supabaseUpstreamHTTP(err)
 		respond(w, code, map[string]any{"error": msg})
 		return
 	}
@@ -74,8 +74,8 @@ func oauthExchangeHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	if !insforgeConfigured() {
-		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "InsForge is not configured"})
+	if !supabaseConfigured() {
+		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "Supabase is not configured"})
 		return
 	}
 	var body map[string]any
@@ -87,9 +87,11 @@ func oauthExchangeHandler(w http.ResponseWriter, r *http.Request) {
 	if ct := strings.TrimSpace(r.URL.Query().Get("client_type")); ct != "" {
 		q.Set("client_type", ct)
 	}
-	resp, status, err := insforgePostWithQuery("/api/auth/oauth/exchange", q, body)
+	// Supabase token exchange: POST /auth/v1/token?grant_type=pkce
+	q.Set("grant_type", "pkce")
+	resp, status, err := supabasePostWithQuery("/auth/v1/token", q, body)
 	if err != nil {
-		code, msg := insforgeUpstreamHTTP(err)
+		code, msg := supabaseUpstreamHTTP(err)
 		respond(w, code, map[string]any{"error": msg})
 		return
 	}
@@ -111,7 +113,12 @@ func syncOAuthUserFromExchange(resp map[string]any) error {
 	}
 	id := mapGetString(userObj, "id")
 	email := normalizeEmail(mapGetString(userObj, "email"))
-	name := strings.TrimSpace(mapGetString(userObj, "name"))
+	// Supabase stores name in user_metadata
+	meta, _ := userObj["user_metadata"].(map[string]any)
+	name := strings.TrimSpace(mapGetString(meta, "name"))
+	if name == "" {
+		name = strings.TrimSpace(mapGetString(meta, "full_name"))
+	}
 	if name == "" && email != "" {
 		if i := strings.IndexByte(email, '@'); i > 0 {
 			name = email[:i]
@@ -128,9 +135,9 @@ func syncOAuthUserFromExchange(resp map[string]any) error {
 		}
 		if email != "" {
 			u.ContactEmail = email
-			u.InsforgeEmail = email
+			u.SupabaseLoginEmail = email
 		}
-		u.InsforgeUserID = id
+		u.SupabaseUserID = id
 		return activeStore.UpdateIdentity(u)
 	}
 	if email != "" {
@@ -145,8 +152,8 @@ func syncOAuthUserFromExchange(resp map[string]any) error {
 		PhoneE164:           phone,
 		AuthEmail:           email,
 		ContactEmail:        email,
-		InsforgeEmail:       email,
-		InsforgeUserID:      id,
+		SupabaseLoginEmail:  email,
+		SupabaseUserID:      id,
 		ContactEmailChecked: true,
 		CreatedAt:           time.Now(),
 	}
@@ -164,17 +171,17 @@ func refreshHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	if !insforgeConfigured() {
-		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "InsForge is not configured"})
+	if !supabaseConfigured() {
+		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "Supabase is not configured"})
 		return
 	}
 	q := url.Values{}
 	if ct := strings.TrimSpace(r.URL.Query().Get("client_type")); ct != "" {
 		q.Set("client_type", ct)
 	}
-	raw, status, err := insforgeRefreshForward(r, q)
+	raw, status, err := supabaseRefreshForward(r, q)
 	if err != nil {
-		code, msg := insforgeUpstreamHTTP(err)
+		code, msg := supabaseUpstreamHTTP(err)
 		respond(w, code, map[string]any{"error": msg})
 		return
 	}
@@ -186,13 +193,13 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	if !insforgeConfigured() {
-		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "InsForge is not configured"})
+	if !supabaseConfigured() {
+		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "Supabase is not configured"})
 		return
 	}
-	raw, status, err := insforgeLogoutForward(r)
+	raw, status, err := supabaseLogoutForward(r)
 	if err != nil {
-		code, msg := insforgeUpstreamHTTP(err)
+		code, msg := supabaseUpstreamHTTP(err)
 		respond(w, code, map[string]any{"error": msg})
 		return
 	}
@@ -204,17 +211,15 @@ func publicConfigHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	if !insforgeConfigured() {
-		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "InsForge is not configured"})
-		return
-	}
-	raw, status, err := insforgeGetAnon("/api/auth/public-config", nil)
-	if err != nil {
-		code, msg := insforgeUpstreamHTTP(err)
-		respond(w, code, map[string]any{"error": msg})
-		return
-	}
-	respondRawJSON(w, status, raw)
+	// Return a static config since Supabase doesn't have a direct equivalent
+	respond(w, http.StatusOK, map[string]any{
+		"oAuthProviders":            []any{},
+		"customOAuthProviders":      []any{},
+		"requireEmailVerification":  true,
+		"passwordMinLength":         6,
+		"verifyEmailMethod":         "code",
+		"resetPasswordMethod":       "code",
+	})
 }
 
 func profilePatchHandler(w http.ResponseWriter, r *http.Request) {
@@ -222,8 +227,8 @@ func profilePatchHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	if !insforgeConfigured() {
-		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "InsForge is not configured"})
+	if !supabaseConfigured() {
+		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "Supabase is not configured"})
 		return
 	}
 	token := bearerToken(r)
@@ -232,16 +237,18 @@ func profilePatchHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	out, status, err := insforgeUserPatch("/api/auth/profiles/current", token, body)
+	// Supabase: PUT /auth/v1/user to update user metadata
+	sbBody := map[string]any{"data": body}
+	out, status, err := supabaseUserPut("/auth/v1/user", token, sbBody)
 	if err != nil {
-		code, msg := insforgeUpstreamHTTP(err)
+		code, msg := supabaseUpstreamHTTP(err)
 		respond(w, code, map[string]any{"error": msg})
 		return
 	}
 	uid := authedUserID(r)
 	if u, ok := activeStore.FindByUserID(uid); ok {
-		if prof, ok := out["profile"].(map[string]any); ok {
-			if n := strings.TrimSpace(mapGetString(prof, "name")); n != "" {
+		if meta, ok := out["user_metadata"].(map[string]any); ok {
+			if n := strings.TrimSpace(mapGetString(meta, "name")); n != "" {
 				u.FullName = n
 			}
 			_ = activeStore.UpdateIdentity(u)

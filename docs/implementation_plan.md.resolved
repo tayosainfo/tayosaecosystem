@@ -1,0 +1,163 @@
+# Migrate from InsForge to Supabase Auth
+
+## Problem
+
+InsForge's email verification returns `500 Failed to create verification token`, making user registration unusable. We're migrating to **Supabase Auth** which has reliable, built-in email delivery.
+
+## Strategy
+
+**Backend-only swap**: Replace the InsForge HTTP client with Supabase GoTrue API calls. The frontend API contract (`/api/v1/auth/*`) stays identical — **no frontend changes needed** except swapping env vars.
+
+### Supabase Credentials
+| Key | Value |
+|-----|-------|
+| Project Ref | `[YOUR-PROJECT-REF]` |
+| URL | `https://[YOUR-PROJECT-REF].supabase.co` |
+| Anon Key | `[YOUR_ANON_KEY]` |
+| Service Role Key | `[YOUR_SERVICE_ROLE_KEY]` |
+| Database | `postgresql://postgres:[PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:5432/postgres` |
+
+### API Mapping (InsForge → Supabase GoTrue)
+
+| Function | InsForge | Supabase |
+|----------|----------|----------|
+| Register | `POST /api/auth/users` | `POST /auth/v1/signup` |
+| Login | `POST /api/auth/sessions` | `POST /auth/v1/token?grant_type=password` |
+| Validate session | `GET /api/auth/sessions/current` | `GET /auth/v1/user` |
+| Send verification | `POST /api/auth/email/send-verification` | `POST /auth/v1/resend` (type=signup) |
+| Verify OTP | `POST /api/auth/email/verify` | `POST /auth/v1/verify` (type=signup) |
+| Send reset email | `POST /api/auth/email/send-reset-password` | `POST /auth/v1/recover` |
+| Reset password | `POST /api/auth/email/reset-password` | `PUT /auth/v1/user` |
+| Refresh token | `POST /api/auth/refresh` | `POST /auth/v1/token?grant_type=refresh_token` |
+| Logout | `POST /api/auth/logout` | `POST /auth/v1/logout` |
+| Admin list users | `GET /api/auth/users` | `GET /auth/v1/admin/users` |
+
+## Proposed Changes
+
+### Backend — Supabase Client
+
+#### [MODIFY] [insforge_client.go](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/services/user-service/insforge_client.go) → rename to `supabase_client.go`
+
+Replace the entire InsForge HTTP client with Supabase GoTrue API equivalents:
+- `insforgeConfigured()` → `supabaseConfigured()` (reads `SUPABASE_URL` + `SUPABASE_ANON_KEY`)
+- `insforgePost()` → `supabasePost()` (calls Supabase GoTrue endpoints)
+- `insforgePostEmailSendVerification()` → `supabaseResendVerification()` (uses service role key)
+- `insforgeAdminConfigured()` → `supabaseServiceRoleConfigured()` (reads `SUPABASE_SERVICE_ROLE_KEY`)
+- `insforgeAdminFindUserIDByEmail()` → `supabaseAdminFindUserIDByEmail()`
+- All HTTP calls use `apikey` header instead of `x-api-key`
+
+---
+
+#### [MODIFY] [auth.go](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/services/user-service/auth.go)
+
+Update session validation to call Supabase `GET /auth/v1/user` with Bearer token instead of InsForge `/api/auth/sessions/current`.
+
+---
+
+#### [MODIFY] [handlers.go](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/services/user-service/handlers.go)
+
+Update all auth handlers to use Supabase API response shapes:
+- `registerHandler`: Call Supabase signup, parse different response shape
+- `loginHandler`: Call Supabase token endpoint
+- `verifyEmailHandler`: Call Supabase verify endpoint
+- `resendVerificationHandler`: Call Supabase resend endpoint
+- `sendResetPasswordEmailHandler`: Call Supabase recover endpoint
+- `resetPasswordHandler`: Call Supabase update user endpoint
+
+---
+
+#### [MODIFY] [handlers_insforge_extended.go](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/services/user-service/handlers_insforge_extended.go)
+
+Update OAuth, refresh, logout, and profile handlers to use Supabase equivalents.
+
+---
+
+#### [MODIFY] [main.go](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/services/user-service/main.go)
+
+Replace InsForge startup checks with Supabase checks. Log `supabase auth enabled (URL)`.
+
+---
+
+#### [MODIFY] [util.go](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/services/user-service/util.go)
+
+Rename `insforgeLoginEmail()` → `supabaseLoginEmail()` and update any InsForge-specific helpers.
+
+---
+
+### Infrastructure
+
+#### [MODIFY] [Dockerfile](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/Dockerfile)
+
+Replace InsForge env vars with Supabase equivalents in start.sh:
+- `INSFORGE_BASE_URL` → `SUPABASE_URL`
+- `INSFORGE_ANON_KEY` → `SUPABASE_ANON_KEY`
+- `INSFORGE_ADMIN_API_KEY` → `SUPABASE_SERVICE_ROLE_KEY`
+
+---
+
+#### [MODIFY] [.env.example](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/.env.example)
+
+Update env var documentation.
+
+---
+
+### Frontend (minimal changes)
+
+#### [MODIFY] [insforge.ts](file:///c:/Users/Lenovo/Desktop/tayosaecosystem/src/lib/insforge.ts) → rename to `supabase.ts`
+
+Replace `@insforge/sdk` with `@supabase/supabase-js`:
+```typescript
+import { createClient } from '@supabase/supabase-js';
+export const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
+```
+
+> [!NOTE]
+> The frontend auth pages (Login, Register, Verify, ForgotPassword) all use `platformApi.ts` which calls the backend API. Since the backend API contract stays the same, **no auth page changes are needed**.
+
+---
+
+### Environment Variables (Render + Vercel)
+
+#### Render (Backend)
+| Remove | Add |
+|--------|-----|
+| `INSFORGE_BASE_URL` | `SUPABASE_URL` = `https://[YOUR-PROJECT-REF].supabase.co` |
+| `INSFORGE_ANON_KEY` | `SUPABASE_ANON_KEY` = `[YOUR_ANON_KEY]` |
+| `INSFORGE_ADMIN_API_KEY` | `SUPABASE_SERVICE_ROLE_KEY` = `[YOUR_SERVICE_ROLE_KEY]` |
+| `INSFORGE_STORAGE_BUCKET` | (remove, use Supabase storage buckets) |
+| Keep `DATABASE_URL` | Update to Supabase: `postgresql://postgres:[PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:5432/postgres` |
+
+#### Vercel (Frontend)
+| Remove | Add |
+|--------|-----|
+| `VITE_INSFORGE_BASE_URL` | `VITE_SUPABASE_URL` = `https://ablvrbnbsdqshrorhmjf.supabase.co` |
+| `VITE_INSFORGE_ANON_KEY` | `VITE_SUPABASE_ANON_KEY` = `sb_publishable_TpZmhKyB9Ybstn9rmCjGqQ_SJgIqPeo` |
+
+## Open Questions
+
+> [!IMPORTANT]
+> **Database password**: The connection string shows `[YOUR-PASSWORD]`. What is the Supabase database password? I'll need it for the `DATABASE_URL` env var.
+
+> [!IMPORTANT]
+> **Existing users**: There are 7 users registered in InsForge. Do you want to migrate them to Supabase, or start fresh?
+
+> [!WARNING]
+> **Database schema**: Your current schema (identities, onboarding, KYC, SACCO, etc.) uses migrations in `db/migrations/`. We'll need to run these against the Supabase PostgreSQL database. The Supabase DB has RLS enabled — we need to create appropriate policies.
+
+## Verification Plan
+
+### Automated Tests
+1. Build passes (`go build` succeeds)
+2. Push to GitHub → Render deploys (exit code 0)
+3. Test registration → verification email arrives
+4. Test login → session returned
+5. Test verification OTP → profile created
+
+### Manual Verification
+1. Register with a real Gmail → verification email arrives from Supabase
+2. Enter 6-digit code → redirected to onboarding
+3. Login with verified account → works
+4. Login with unverified account → redirected to verify page

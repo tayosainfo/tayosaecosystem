@@ -45,7 +45,7 @@ func (s *PostgresStore) Ping() error {
 func (s *PostgresStore) FindByPhone(phoneE164 string) (User, bool) {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, `
-SELECT user_id, full_name, phone_e164, auth_email, contact_email, insforge_user_id, COALESCE(insforge_login_email,''),
+SELECT user_id, full_name, phone_e164, auth_email, contact_email, supabase_user_id, COALESCE(supabase_login_email,''),
 password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality
 FROM users_identity WHERE phone_e164 = $1`, phoneE164)
 	u, err := scanUser(row)
@@ -58,12 +58,12 @@ FROM users_identity WHERE phone_e164 = $1`, phoneE164)
 func (s *PostgresStore) FindByEmailKey(normalizedEmail string) (User, bool) {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, `
-SELECT user_id, full_name, phone_e164, auth_email, contact_email, insforge_user_id, COALESCE(insforge_login_email,''),
+SELECT user_id, full_name, phone_e164, auth_email, contact_email, supabase_user_id, COALESCE(supabase_login_email,''),
 password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality
 FROM users_identity
 WHERE LOWER(TRIM(contact_email)) = LOWER(TRIM($1))
    OR LOWER(TRIM(auth_email)) = LOWER(TRIM($1))
-   OR LOWER(TRIM(COALESCE(insforge_login_email,''))) = LOWER(TRIM($1))
+   OR LOWER(TRIM(COALESCE(supabase_login_email,''))) = LOWER(TRIM($1))
 LIMIT 1`, normalizedEmail)
 	u, err := scanUser(row)
 	if err != nil {
@@ -75,7 +75,7 @@ LIMIT 1`, normalizedEmail)
 func (s *PostgresStore) FindByUserID(userID string) (User, bool) {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, `
-SELECT user_id, full_name, phone_e164, auth_email, contact_email, insforge_user_id, COALESCE(insforge_login_email,''),
+SELECT user_id, full_name, phone_e164, auth_email, contact_email, supabase_user_id, COALESCE(supabase_login_email,''),
 password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality
 FROM users_identity WHERE user_id = $1`, userID)
 	u, err := scanUser(row)
@@ -87,14 +87,14 @@ FROM users_identity WHERE user_id = $1`, userID)
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	var contact, insforgeID *string
-	var insforgeLogin string
+	var contact, supabaseID *string
+	var supabaseLogin string
 	var pwdHash *string
 	var phoneV, emailV *time.Time
 	var created time.Time
 	var dob *time.Time
 	var nat *string
-	err := row.Scan(&u.ID, &u.FullName, &u.PhoneE164, &u.AuthEmail, &contact, &insforgeID, &insforgeLogin,
+	err := row.Scan(&u.ID, &u.FullName, &u.PhoneE164, &u.AuthEmail, &contact, &supabaseID, &supabaseLogin,
 		&pwdHash, &phoneV, &emailV, &created, &dob, &nat)
 	if err != nil {
 		return User{}, err
@@ -102,10 +102,10 @@ func scanUser(row pgx.Row) (User, error) {
 	if contact != nil {
 		u.ContactEmail = *contact
 	}
-	if insforgeID != nil {
-		u.InsforgeUserID = *insforgeID
+	if supabaseID != nil {
+		u.SupabaseUserID = *supabaseID
 	}
-	u.InsforgeEmail = insforgeLogin
+	u.SupabaseLoginEmail = supabaseLogin
 	if pwdHash != nil {
 		u.PasswordHash = *pwdHash
 	}
@@ -139,13 +139,13 @@ func (s *PostgresStore) CreateIdentityWithOnboarding(u User, ob OnboardingProfil
 	if u.ContactEmail != "" {
 		contact = u.ContactEmail
 	}
-	var insforgeID any
-	if u.InsforgeUserID != "" {
-		insforgeID = u.InsforgeUserID
+	var supabaseID any
+	if u.SupabaseUserID != "" {
+		supabaseID = u.SupabaseUserID
 	}
-	var ifLogin any
-	if u.InsforgeEmail != "" {
-		ifLogin = u.InsforgeEmail
+	var supabaseLogin any
+	if u.SupabaseLoginEmail != "" {
+		supabaseLogin = u.SupabaseLoginEmail
 	}
 	var ph any
 	if passwordHash != nil {
@@ -161,9 +161,9 @@ func (s *PostgresStore) CreateIdentityWithOnboarding(u User, ob OnboardingProfil
 	}
 
 	_, err = tx.Exec(ctx, `
-INSERT INTO users_identity (user_id, full_name, phone_e164, auth_email, contact_email, insforge_user_id, insforge_login_email, password_hash, date_of_birth, nationality, updated_at)
+INSERT INTO users_identity (user_id, full_name, phone_e164, auth_email, contact_email, supabase_user_id, supabase_login_email, password_hash, date_of_birth, nationality, updated_at)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())`,
-		u.ID, u.FullName, u.PhoneE164, u.AuthEmail, contact, insforgeID, ifLogin, ph, dob, nat)
+		u.ID, u.FullName, u.PhoneE164, u.AuthEmail, contact, supabaseID, supabaseLogin, ph, dob, nat)
 	if err != nil {
 		return err
 	}
@@ -210,12 +210,12 @@ func (s *PostgresStore) UpdateIdentity(u User) error {
 		contact = u.ContactEmail
 	}
 	var iid any
-	if strings.TrimSpace(u.InsforgeUserID) != "" {
-		iid = u.InsforgeUserID
+	if strings.TrimSpace(u.SupabaseUserID) != "" {
+		iid = u.SupabaseUserID
 	}
 	var ifLogin any
-	if strings.TrimSpace(u.InsforgeEmail) != "" {
-		ifLogin = u.InsforgeEmail
+	if strings.TrimSpace(u.SupabaseLoginEmail) != "" {
+		ifLogin = u.SupabaseLoginEmail
 	}
 	var ph any
 	if strings.TrimSpace(u.PasswordHash) != "" {
@@ -225,8 +225,8 @@ func (s *PostgresStore) UpdateIdentity(u User) error {
 UPDATE users_identity SET
   full_name = $2,
   contact_email = COALESCE($3, contact_email),
-  insforge_user_id = COALESCE($4, insforge_user_id),
-  insforge_login_email = COALESCE($5, insforge_login_email),
+  supabase_user_id = COALESCE($4, supabase_user_id),
+  supabase_login_email = COALESCE($5, supabase_login_email),
   password_hash = COALESCE($6, password_hash),
   updated_at = now()
 WHERE user_id = $1`,

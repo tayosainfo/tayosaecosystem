@@ -27,19 +27,21 @@ COPY <<'EOF' /app/start.sh
 # Fall back to 8080 for local docker runs.
 GATEWAY_PORT="${PORT:-8080}"
 
-# Pass InsForge credentials explicitly so every sub-process has them,
-# regardless of how the shell inherits env vars.
-INSFORGE_BASE_URL="${INSFORGE_BASE_URL:-https://74qj9u5z.us-east.insforge.app}"
-INSFORGE_ANON_KEY="${INSFORGE_ANON_KEY:-}"
-INSFORGE_ADMIN_API_KEY="${INSFORGE_ADMIN_API_KEY:-}"
-INSFORGE_STORAGE_BUCKET="${INSFORGE_STORAGE_BUCKET:-collateral_docs}"
+# Pass Supabase credentials explicitly so every sub-process has them.
+SUPABASE_URL="${SUPABASE_URL:-}"
+SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-}"
+SUPABASE_SERVICE_ROLE_KEY="${SUPABASE_SERVICE_ROLE_KEY:-}"
 ADMIN_API_KEY="${ADMIN_API_KEY:-}"
 DATABASE_URL="${DATABASE_URL:-}"
+# Legacy InsForge vars mapped to Supabase for object-storage compatibility
+INSFORGE_BASE_URL="${SUPABASE_URL:-}"
+INSFORGE_ANON_KEY="${SUPABASE_ANON_KEY:-}"
+INSFORGE_STORAGE_BUCKET="${INSFORGE_STORAGE_BUCKET:-collateral_docs}"
 
 PORT=8081 \
-  INSFORGE_BASE_URL="$INSFORGE_BASE_URL" \
-  INSFORGE_ANON_KEY="$INSFORGE_ANON_KEY" \
-  INSFORGE_ADMIN_API_KEY="$INSFORGE_ADMIN_API_KEY" \
+  SUPABASE_URL="$SUPABASE_URL" \
+  SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
+  SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
   ADMIN_API_KEY="$ADMIN_API_KEY" \
   DATABASE_URL="$DATABASE_URL" \
   ./user-server &

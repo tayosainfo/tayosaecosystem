@@ -36,8 +36,8 @@ func userPublicProfile(u User) map[string]any {
 		"contactEmailVerified": u.ContactEmailChecked,
 		"createdAt":            u.CreatedAt,
 	}
-	if strings.TrimSpace(u.InsforgeUserID) != "" {
-		out["insforgeUserId"] = u.InsforgeUserID
+	if strings.TrimSpace(u.SupabaseUserID) != "" {
+		out["supabaseUserId"] = u.SupabaseUserID
 	}
 	if u.DateOfBirth != nil {
 		out["dateOfBirth"] = u.DateOfBirth.Format("2006-01-02")
@@ -48,20 +48,9 @@ func userPublicProfile(u User) map[string]any {
 	return out
 }
 
-// insforgeUpstreamHTTP maps errors from insforgePost / InsforgeRequestError to an HTTP status and message.
-func insforgeUpstreamHTTP(err error) (status int, msg string) {
-	var ifErr *InsforgeRequestError
-	if errors.As(err, &ifErr) {
-		s := ifErr.Status
-		if s >= 400 && s <= 599 {
-			return s, ifErr.Message
-		}
-		return http.StatusBadGateway, ifErr.Message
-	}
-	return http.StatusBadGateway, err.Error()
-}
+// kept in supabase_client.go as supabaseUpstreamHTTP
 
-// clientTypeQuery forwards InsForge ?client_type=web|mobile|desktop|server from the incoming request URL.
+// clientTypeQuery forwards ?client_type=web|mobile|desktop|server from the incoming request URL.
 func clientTypeQuery(r *http.Request) url.Values {
 	q := url.Values{}
 	if ct := strings.TrimSpace(r.URL.Query().Get("client_type")); ct != "" {
@@ -144,49 +133,52 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !insforgeConfigured() {
+	if !supabaseConfigured() {
 		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "auth backend not configured"})
 		return
 	}
 
-	// Register with InsForge using the real email address.
-	signupResp, _, err := insforgePostWithQuery("/api/auth/users", clientTypeQuery(r), map[string]any{
+	// Register with Supabase using OTP verification method
+	signupResp, _, err := supabasePostWithQuery("/auth/v1/signup", clientTypeQuery(r), map[string]any{
 		"email":    contactEmail,
 		"password": req.Password,
-		"name":     req.FullName,
+		"data":     map[string]any{"name": req.FullName},
 	})
 	if err != nil {
-		var ifErr *InsforgeRequestError
-		if errors.As(err, &ifErr) && ifErr.Status == http.StatusConflict {
-			respond(w, http.StatusConflict, map[string]any{"error": ifErr.Message})
+		var sbErr *SupabaseRequestError
+		if errors.As(err, &sbErr) && sbErr.Status == http.StatusConflict {
+			respond(w, http.StatusConflict, map[string]any{"error": sbErr.Message})
 			return
 		}
-		code, msg := insforgeUpstreamHTTP(err)
+		code, msg := supabaseUpstreamHTTP(err)
 		respond(w, code, map[string]any{"error": msg})
 		return
 	}
 
-	ifUserID := extractInsForgeSignupUserID(signupResp)
-	if ifUserID == "" && insforgeAdminConfigured() {
-		if id, aerr := insforgeAdminFindUserIDByEmail(contactEmail); aerr == nil && id != "" {
+	ifUserID := extractSupabaseSignupUserID(signupResp)
+	if ifUserID == "" && supabaseServiceRoleConfigured() {
+		if id, aerr := supabaseAdminFindUserIDByEmail(contactEmail); aerr == nil && id != "" {
 			ifUserID = id
 		}
 	}
 
-	// Email verification is required — profile will be completed after /verify.
-	needsVerify := mapGetBool(signupResp, "requireEmailVerification") || !insforgeSignupHasAccessToken(signupResp)
-
-	if needsVerify && insforgeAdminConfigured() {
-		_, _, sendErr := insforgePostEmailSendVerification(clientTypeQuery(r), map[string]any{"email": contactEmail})
-		if sendErr != nil {
-			log.Printf("user-service: post-signup send-verification for %s failed: %v", contactEmail, sendErr)
+	// Send OTP for email verification
+	needsVerify := !supabaseSignupHasAccessToken(signupResp)
+	if needsVerify && supabaseConfigured() {
+		// Send OTP using the dedicated OTP endpoint
+		_, _, otpErr := supabasePostWithQuery("/auth/v1/otp", clientTypeQuery(r), map[string]any{
+			"email": contactEmail,
+			"type":  "signup",
+		})
+		if otpErr != nil {
+			log.Printf("user-service: OTP send failed for %s: %v", contactEmail, otpErr)
 		} else {
-			log.Printf("user-service: post-signup verification email triggered for %s", contactEmail)
+			log.Printf("user-service: OTP sent successfully for %s", contactEmail)
 		}
 	}
 
 	if ifUserID == "" {
-		// InsForge requires email verification before revealing the user ID.
+		// Supabase requires email verification before revealing the user ID.
 		if needsVerify {
 			// Store pending profile data so /verify-email can finish creating the local record.
 			respond(w, http.StatusCreated, map[string]any{
@@ -198,7 +190,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respond(w, http.StatusBadGateway, map[string]any{
-			"error": "InsForge signup response missing user id",
+			"error": "Supabase signup response missing user id",
 		})
 		return
 	}
@@ -209,8 +201,8 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		PhoneE164:      phoneE164,
 		AuthEmail:      contactEmail,
 		ContactEmail:   contactEmail,
-		InsforgeEmail:  contactEmail,
-		InsforgeUserID: ifUserID,
+		SupabaseLoginEmail:  contactEmail,
+		SupabaseUserID: ifUserID,
 		DateOfBirth:    dobPtr,
 		Nationality:    nationality,
 		CreatedAt:      time.Now(),
@@ -251,7 +243,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	respond(w, http.StatusCreated, map[string]any{
 		"user":                     userPublicProfile(u),
-		"session":                  sessionPayloadFromInsForge(signupResp, u.ID),
+		"session":                  sessionPayloadFromSupabase(signupResp, u.ID),
 		"requireEmailVerification": needsVerify,
 		"referralCode":             refCode,
 	})
@@ -274,7 +266,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve identifier to an InsForge email.
+	// Resolve identifier to a Supabase email.
 	// Email is always the primary credential; phone is accepted as a lookup convenience.
 	loginEmail := ""
 	if strings.Contains(identifier, "@") {
@@ -282,7 +274,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		if phone, err := normalizePhone(identifier); err == nil {
 			if u, ok := activeStore.FindByPhone(phone); ok {
-				loginEmail = insforgeLoginEmail(u)
+				loginEmail = supabaseLoginEmail(u)
 			}
 		}
 	}
@@ -292,61 +284,64 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !insforgeConfigured() {
+	if !supabaseConfigured() {
 		respond(w, http.StatusServiceUnavailable, map[string]any{"error": "auth backend not configured"})
 		return
 	}
 
-	sessionResp, _, err := insforgePostWithQuery("/api/auth/sessions", clientTypeQuery(r), map[string]any{
+	// Supabase login: POST /auth/v1/token?grant_type=password
+	loginQuery := clientTypeQuery(r)
+	loginQuery.Set("grant_type", "password")
+	sessionResp, _, err := supabasePostWithQuery("/auth/v1/token", loginQuery, map[string]any{
 		"email":    loginEmail,
 		"password": req.Password,
 	})
 	if err != nil {
-		var ifErr *InsforgeRequestError
-		if errors.As(err, &ifErr) {
-			if ifErr.Status == http.StatusTooManyRequests {
-				respond(w, http.StatusTooManyRequests, map[string]any{"error": ifErr.Message})
+		var sbErr *SupabaseRequestError
+		if errors.As(err, &sbErr) {
+			if sbErr.Status == http.StatusTooManyRequests {
+				respond(w, http.StatusTooManyRequests, map[string]any{"error": sbErr.Message})
 				return
 			}
-			payload := map[string]any{"error": ifErr.Message}
-			if insforgeIndicatesEmailNotVerified(ifErr.Status, ifErr.Message) {
+			payload := map[string]any{"error": sbErr.Message}
+			if supabaseIndicatesEmailNotVerified(sbErr.Status, sbErr.Message) {
 				payload["requireEmailVerification"] = true
 				payload["email"] = loginEmail
-				st := ifErr.Status
+				st := sbErr.Status
 				if st == http.StatusUnauthorized {
 					st = http.StatusForbidden
 				}
 				respond(w, st, payload)
 				return
 			}
-			respond(w, ifErr.Status, payload)
+			respond(w, sbErr.Status, payload)
 			return
 		}
 		respond(w, http.StatusUnauthorized, map[string]any{"error": "Invalid email or password"})
 		return
 	}
 
-	// Sync InsForge user ID back to the local TAYOSA profile.
-	ifUserObj, _ := sessionResp["user"].(map[string]any)
-	ifUserID := mapGetString(ifUserObj, "id")
+	// Sync Supabase user ID back to the local TAYOSA profile.
+	sbUserObj, _ := sessionResp["user"].(map[string]any)
+	sbUserID := mapGetString(sbUserObj, "id")
 
 	user, found := activeStore.FindByEmailKey(loginEmail)
-	if found && ifUserID != "" {
-		user.InsforgeUserID = ifUserID
-		user.ID = ifUserID
+	if found && sbUserID != "" {
+		user.SupabaseUserID = sbUserID
+		user.ID = sbUserID
 		_ = activeStore.UpdateIdentity(user)
-		if refreshed, ok := activeStore.FindByUserID(ifUserID); ok {
+		if refreshed, ok := activeStore.FindByUserID(sbUserID); ok {
 			user = refreshed
 		}
 	}
 
 	if !found {
-		// InsForge login succeeded but no local TAYOSA profile yet.
+		// Supabase login succeeded but no local TAYOSA profile yet.
 		respond(w, http.StatusOK, map[string]any{
-			"session": sessionPayloadFromInsForge(sessionResp, ifUserID),
+			"session": sessionPayloadFromSupabase(sessionResp, sbUserID),
 			"user": map[string]any{
-				"id":           ifUserID,
-				"fullName":     mapGetString(ifUserObj, "name"),
+				"id":           sbUserID,
+				"fullName":     mapGetString(sbUserObj, "name"),
 				"contactEmail": loginEmail,
 			},
 		})
@@ -354,7 +349,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respond(w, http.StatusOK, map[string]any{
-		"session": sessionPayloadFromInsForge(sessionResp, user.ID),
+		"session": sessionPayloadFromSupabase(sessionResp, user.ID),
 		"user":    userPublicProfile(user),
 	})
 }
@@ -376,32 +371,18 @@ func resendVerificationHandler(w http.ResponseWriter, r *http.Request) {
 
 	target := email
 	if u, ok := lookupUserByEmailKey(email); ok {
-		target = insforgeLoginEmail(u)
+		target = supabaseLoginEmail(u)
 	}
 
-	if insforgeConfigured() {
-		// Use the properly authenticated send-verification function (anon Bearer + x-api-key admin)
-		// so InsForge can identify the project/tenant and actually deliver the email.
-		// Fall back to no-auth only if the admin key is not configured.
-		var out map[string]any
-		var err error
-		if insforgeAdminConfigured() {
-			out, _, err = insforgePostEmailSendVerification(clientTypeQuery(r), map[string]any{"email": target})
-		} else {
-			log.Printf("user-service: INSFORGE_ADMIN_API_KEY not set — falling back to no-auth send-verification for %s (may silently fail)", target)
-			out, _, err = insforgePostNoAuthWithQuery("/api/auth/email/send-verification", clientTypeQuery(r), map[string]any{"email": target})
-		}
+	if supabaseConfigured() {
+		out, _, err := supabaseResendVerification(clientTypeQuery(r), map[string]any{"email": target})
 		if err != nil {
 			code := http.StatusBadGateway
-			var ifErr *InsforgeRequestError
-			if errors.As(err, &ifErr) && ifErr.Status >= 400 {
-				code = ifErr.Status
+			var sbErr *SupabaseRequestError
+			if errors.As(err, &sbErr) && sbErr.Status >= 400 {
+				code = sbErr.Status
 			}
-			payload := map[string]any{"error": err.Error()}
-			if code >= 500 || strings.Contains(strings.ToLower(err.Error()), "verification token") {
-				payload["hint"] = "InsForge could not create or send a verification token for this project. In the InsForge dashboard, configure outbound email (enable Custom SMTP or ensure the default email provider is enabled for your plan/project), and keep the project active. Tayosa is only proxying InsForge's /api/auth/email/send-verification."
-			}
-			respond(w, code, payload)
+			respond(w, code, map[string]any{"error": err.Error()})
 			return
 		}
 		respond(w, http.StatusOK, out)
@@ -435,40 +416,40 @@ func verifyEmailHandler(w http.ResponseWriter, r *http.Request) {
 
 	target := email
 	if u, ok := lookupUserByEmailKey(email); ok {
-		target = insforgeLoginEmail(u)
+		target = supabaseLoginEmail(u)
 	}
 
-	if insforgeConfigured() {
-		out, _, err := insforgePostWithQuery("/api/auth/email/verify", clientTypeQuery(r), map[string]any{
+	if supabaseConfigured() {
+		// Supabase verify: POST /auth/v1/verify
+		out, _, err := supabasePostWithQuery("/auth/v1/verify", clientTypeQuery(r), map[string]any{
+			"type":  "signup",
+			"token": req.OTP,
 			"email": target,
-			"otp":   req.OTP,
 		})
 		if err != nil {
-			code, msg := insforgeUpstreamHTTP(err)
+			code, msg := supabaseUpstreamHTTP(err)
 			if code < 400 {
 				code = http.StatusUnauthorized
 			}
 			respond(w, code, map[string]any{"error": msg})
 			return
 		}
+		// Supabase verify response: { "access_token": "...", "user": { "id": "...", "email_confirmed_at": "..." } }
 		userObj, _ := out["user"].(map[string]any)
-		ev := false
-		if v, ok := userObj["emailVerified"].(bool); ok {
-			ev = v
-		}
-		ifUserID := extractInsForgeSignupUserID(out)
+		ev := mapGetString(userObj, "email_confirmed_at") != ""
+		ifUserID := extractSupabaseSignupUserID(out)
 		if ifUserID == "" {
-			ifUserID = extractInsForgeSignupUserID(map[string]any{"user": userObj})
+			ifUserID = extractSupabaseSignupUserID(map[string]any{"user": userObj})
 		}
 		if ifUserID == "" {
 			respond(w, http.StatusBadGateway, map[string]any{
-				"error":                "InsForge verify response missing user id",
-				"insforgeResponseKeys": topLevelJSONKeys(out),
+				"error":              "Supabase verify response missing user id",
+				"supabaseResponseKeys": topLevelJSONKeys(out),
 			})
 			return
 		}
 
-		insforgeMail := firstNonEmpty(mapGetString(userObj, "email"), target)
+		supabaseMail := firstNonEmpty(mapGetString(userObj, "email"), target)
 		u0, userOk := lookupUserByEmailKey(email)
 		if userOk {
 			_ = activeStore.SetContactEmailVerified(u0.PhoneE164, ev)
@@ -479,7 +460,7 @@ func verifyEmailHandler(w http.ResponseWriter, r *http.Request) {
 				user = u0
 			}
 			respond(w, http.StatusOK, map[string]any{
-				"session": sessionPayloadFromInsForge(out, user.ID),
+				"session": sessionPayloadFromSupabase(out, user.ID),
 				"user":    userPublicProfile(user),
 			})
 			return
@@ -525,8 +506,8 @@ func verifyEmailHandler(w http.ResponseWriter, r *http.Request) {
 			PhoneE164:      phoneE164,
 			AuthEmail:      authEmail,
 			ContactEmail:   contactEmail,
-			InsforgeEmail:  insforgeMail,
-			InsforgeUserID: ifUserID,
+			SupabaseLoginEmail:  supabaseMail,
+			SupabaseUserID: ifUserID,
 			DateOfBirth:    dobPtr,
 			Nationality:    nationality,
 			CreatedAt:      time.Now(),
@@ -553,7 +534,7 @@ func verifyEmailHandler(w http.ResponseWriter, r *http.Request) {
 			user = u
 		}
 		respond(w, http.StatusOK, map[string]any{
-			"session":                  sessionPayloadFromInsForge(out, user.ID),
+			"session":                  sessionPayloadFromSupabase(out, user.ID),
 			"user":                     userPublicProfile(user),
 			"requireEmailVerification": false,
 		})
@@ -579,16 +560,17 @@ func sendResetPasswordEmailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	target := email
 	if u, ok := lookupUserByEmailKey(email); ok {
-		target = insforgeLoginEmail(u)
+		target = supabaseLoginEmail(u)
 	}
 
-	if insforgeConfigured() {
-		out, _, err := insforgePost("/api/auth/email/send-reset-password", map[string]any{"email": target})
+	if supabaseConfigured() {
+		// Supabase recover: POST /auth/v1/recover
+		out, _, err := supabasePost("/auth/v1/recover", map[string]any{"email": target})
 		if err != nil {
 			code := http.StatusBadGateway
-			var ifErr *InsforgeRequestError
-			if errors.As(err, &ifErr) && ifErr.Status >= 400 {
-				code = ifErr.Status
+			var sbErr *SupabaseRequestError
+			if errors.As(err, &sbErr) && sbErr.Status >= 400 {
+				code = sbErr.Status
 			}
 			respond(w, code, map[string]any{"error": err.Error()})
 			return
@@ -619,19 +601,26 @@ func exchangeResetPasswordTokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	target := email
 	if u, ok := lookupUserByEmailKey(email); ok {
-		target = insforgeLoginEmail(u)
+		target = supabaseLoginEmail(u)
 	}
 
-	if insforgeConfigured() {
-		out, _, err := insforgePost("/api/auth/email/exchange-reset-password-token", map[string]any{
+	if supabaseConfigured() {
+		// Supabase: verify recovery OTP via /auth/v1/verify with type=recovery
+		out, _, err := supabasePost("/auth/v1/verify", map[string]any{
+			"type":  "recovery",
+			"token": req.Code,
 			"email": target,
-			"code":  req.Code,
 		})
 		if err != nil {
 			respond(w, http.StatusUnauthorized, map[string]any{"error": err.Error()})
 			return
 		}
-		respond(w, http.StatusOK, out)
+		// Supabase returns access_token on successful recovery verify
+		accessToken := mapGetString(out, "access_token")
+		respond(w, http.StatusOK, map[string]any{
+			"token":     accessToken,
+			"expiresAt": time.Now().Add(15 * time.Minute).Format(time.RFC3339),
+		})
 		return
 	}
 
@@ -664,16 +653,16 @@ func resetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if insforgeConfigured() {
-		out, _, err := insforgePost("/api/auth/email/reset-password", map[string]any{
-			"newPassword": req.NewPassword,
-			"otp":         req.OTP,
+	if supabaseConfigured() {
+		// Use the OTP as a Bearer token (from exchangeResetPasswordToken) to update password
+		out, _, err := supabaseUserPut("/auth/v1/user", req.OTP, map[string]any{
+			"password": req.NewPassword,
 		})
 		if err != nil {
 			code := http.StatusUnauthorized
-			var ifErr *InsforgeRequestError
-			if errors.As(err, &ifErr) && ifErr.Status >= 400 {
-				code = ifErr.Status
+			var sbErr *SupabaseRequestError
+			if errors.As(err, &sbErr) && sbErr.Status >= 400 {
+				code = sbErr.Status
 			}
 			respond(w, code, map[string]any{"error": err.Error()})
 			return

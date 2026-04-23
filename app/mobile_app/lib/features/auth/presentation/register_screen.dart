@@ -57,34 +57,26 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     }
 
     try {
-      final api = ref.read(apiClientProvider);
-      final response = await api.post(
-        '/api/v1/auth/register',
-        data: {
-          'fullName': '$firstName $lastName',
-          'phone': phone,
-          'email': email,
-          'password': password,
-          'nationality': 'UG',
-        },
+      final apiClient = ref.read(apiClientInstanceProvider);
+      final response = await apiClient.register(
+        email: email,
+        password: password,
+        fullName: '$firstName $lastName',
+        phone: phone,
       );
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final prefs = await SharedPreferences.getInstance();
-        if (response.data['user'] != null) {
-          await prefs.setString('user_id', response.data['user']['id']?.toString() ?? '');
-          await prefs.setString('user_name', response.data['user']['fullName'] ?? '$firstName $lastName');
-          await prefs.setString('user_phone', response.data['user']['phoneE164'] ?? phone);
-          await prefs.setString('user_email', response.data['user']['contactEmail'] ?? email);
-        }
-        final session = response.data['session'];
-        if (session != null && session['accessToken'] != null) {
-          await prefs.setString('auth_token', session['accessToken'].toString());
-        }
-        if (mounted) context.go('/geo-onboarding');
-      } else {
-        setState(() => _error = response.data['error'] ?? 'Registration failed');
+      final prefs = await SharedPreferences.getInstance();
+      if (response['user'] != null) {
+        await prefs.setString('user_id', response['user']['id']?.toString() ?? '');
+        await prefs.setString('user_name', response['user']['fullName'] ?? '$firstName $lastName');
+        await prefs.setString('user_phone', response['user']['phoneE164'] ?? phone);
+        await prefs.setString('user_email', response['user']['contactEmail'] ?? email);
       }
+      final session = response['session'];
+      if (session != null && session['accessToken'] != null) {
+        await prefs.setString('auth_token', session['accessToken'].toString());
+      }
+      if (mounted) context.go('/geo-onboarding');
     } catch (e) {
       // Graceful fallback for demo (no gateway); geo + onboarding need a token in real runs.
       print('Mocking register gracefully: $e');

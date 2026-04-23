@@ -10,8 +10,8 @@ type User struct {
 	ContactEmail        string     `json:"contactEmail,omitempty"`
 	Password            string     `json:"-"` // in-memory dev plain text (never persist)
 	PasswordHash        string     `json:"-"` // bcrypt from Postgres
-	InsforgeUserID      string     `json:"insforgeUserId,omitempty"`
-	InsforgeEmail       string     `json:"-"`
+	SupabaseUserID      string     `json:"supabaseUserId,omitempty"`
+	SupabaseLoginEmail  string     `json:"-"`
 	DateOfBirth         *time.Time `json:"-"` // surfaced in /users/me as dateOfBirth (YYYY-MM-DD)
 	Nationality         string     `json:"nationality,omitempty"`
 	PhoneVerifiedAt     time.Time  `json:"phoneVerifiedAt,omitempty"`

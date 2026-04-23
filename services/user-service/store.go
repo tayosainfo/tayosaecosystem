@@ -47,7 +47,7 @@ type Store interface {
 var activeStore Store
 
 // databaseDSN returns Postgres URL for user-service. DATABASE_URL is preferred;
-// CONNECTION_STRING is accepted for InsForge-style .env exports.
+// CONNECTION_STRING is accepted for compatibility with various .env exports.
 func databaseDSN() string {
 	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
 		return v
@@ -72,9 +72,9 @@ func initStore() {
 			log.Fatalf(`postgres store: %v
 
 user-service cannot open DATABASE_URL. Common causes on Windows:
-  • InsForge (or other) *managed* Postgres hostnames often do NOT accept direct TCP from your PC — use InsForge HTTP APIs (INSFORGE_BASE_URL) for auth, not raw Postgres from your laptop.
+  • Managed Postgres hostnames often do NOT accept direct TCP from your PC — use Supabase HTTP APIs for auth, not raw Postgres from your laptop.
   • For a real local DB: docker compose up -d postgres (repo root), apply db/migrations/*.sql, then set DATABASE_URL to localhost (see .env.example).
-  • user-service reads DATABASE_URL or CONNECTION_STRING (same InsForge string is fine under either name).
+  • user-service reads DATABASE_URL or CONNECTION_STRING (either name works).
   • For quick UI tests without Postgres: remove or comment DATABASE_URL in .env (in-memory store; data resets when the process exits).
   • To keep DATABASE_URL in .env but still run when the cloud DB is down: set USER_SERVICE_ALLOW_MEMORY_FALLBACK=1 (uses in-memory store; not for production).`, err)
 		}

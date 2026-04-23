@@ -15,8 +15,7 @@ type authResult struct {
 	UserID string
 }
 
-// authFromRequest validates the Bearer token by calling InsForge.
-// dev-token-* and local fallbacks have been removed — InsForge is required.
+// authFromRequest validates the Bearer token by calling Supabase.
 func authFromRequest(r *http.Request) (authResult, error) {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(auth, "Bearer ") {
@@ -27,16 +26,16 @@ func authFromRequest(r *http.Request) (authResult, error) {
 		return authResult{}, errors.New("missing bearer token")
 	}
 
-	if !insforgeConfigured() {
+	if !supabaseConfigured() {
 		return authResult{}, errors.New("auth backend not configured")
 	}
 
-	sess, _, err := insforgeUserGet("/api/auth/sessions/current", token)
+	// Supabase: GET /auth/v1/user returns user object directly (not wrapped in { user: ... })
+	user, _, err := supabaseUserGet("/auth/v1/user", token)
 	if err != nil {
 		return authResult{}, errors.New("invalid or expired session")
 	}
-	userObj, _ := sess["user"].(map[string]any)
-	id := mapGetString(userObj, "id")
+	id := mapGetString(user, "id")
 	if id == "" {
 		return authResult{}, errors.New("invalid session")
 	}
