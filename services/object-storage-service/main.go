@@ -56,6 +56,16 @@ func supabaseServiceBearer() (string, bool) {
 	return "", false
 }
 
+// supabaseAdminBearer returns the Supabase service role key for admin operations
+// like bucket creation. This should only be used for administrative tasks.
+func supabaseAdminBearer() (string, bool) {
+	key := strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY"))
+	if key != "" {
+		return "Bearer " + key, true
+	}
+	return "", false
+}
+
 // ---------------------------------------------------------------------------
 // Supabase Token Validation
 // ---------------------------------------------------------------------------
@@ -339,10 +349,10 @@ func main() {
 	}
 
 	// Eagerly verify bucket exists at startup.
-	if bearer, ok := supabaseServiceBearer(); ok {
+	if bearer, ok := supabaseAdminBearer(); ok {
 		go ensureBucket(storageBucket(), bearer)
 	} else {
-		log.Print("WARNING: SUPABASE_ANON_KEY not set — KYC file uploads will fail")
+		log.Print("WARNING: SUPABASE_SERVICE_ROLE_KEY not set — bucket creation will fail")
 	}
 
 	mux := http.NewServeMux()
