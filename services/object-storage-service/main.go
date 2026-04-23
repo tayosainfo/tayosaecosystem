@@ -249,14 +249,6 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serviceBearer, ok := supabaseServiceBearer()
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"error": "SUPABASE_ANON_KEY is not configured on this server",
-		})
-		return
-	}
-
 	// 32 MB in-memory, remainder spills to temp files.
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid multipart form: " + err.Error()})
