@@ -142,7 +142,11 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	signupResp, _, err := supabasePostWithQuery("/auth/v1/signup", clientTypeQuery(r), map[string]any{
 		"email":    contactEmail,
 		"password": req.Password,
-		"data":     map[string]any{"name": req.FullName},
+		"phone":    phoneE164,
+		"data": map[string]any{
+			"name":  req.FullName,
+			"phone": phoneE164,
+		},
 	})
 	if err != nil {
 		var sbErr *SupabaseRequestError
