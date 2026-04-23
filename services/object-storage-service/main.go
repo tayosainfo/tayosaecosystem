@@ -298,8 +298,19 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	if safeFilename == "" {
 		safeFilename = "upload.bin"
 	}
-	objectPath := fmt.Sprintf("%s/%s-%s",
-		category,
+
+	// Get user ID from validated token (set by requireAuth middleware)
+	userID := r.Header.Get("X-User-Id")
+	if userID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "user ID not found in request"})
+		return
+	}
+
+	// Build folder-based path: {user_id}/{category}/{timestamp}-{filename}
+	// This enables folder-based RLS policies for better security
+	objectPath := fmt.Sprintf("%s/%s/%s-%s",
+		userID,    // User's folder (Supabase user ID)
+		category,  // kyc, documents, etc.
 		time.Now().UTC().Format("20060102150405"),
 		safeFilename,
 	)
