@@ -139,10 +139,11 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register with Supabase using OTP verification method
+	// Note: Supabase only accepts email OR phone, not both. We use email for auth
+	// and store phone separately in our local database and user metadata.
 	signupResp, _, err := supabasePostWithQuery("/auth/v1/signup", clientTypeQuery(r), map[string]any{
 		"email":    contactEmail,
 		"password": req.Password,
-		"phone":    phoneE164,
 		"data": map[string]any{
 			"name":  req.FullName,
 			"phone": phoneE164,
