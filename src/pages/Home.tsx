@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Clock3, Lock, ArrowRight, Users, PiggyBank, Landmark, Wallet } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { platformApi } from '../lib/platformApi';
+import { makeAdminRequest } from '../utils/api';
 
 type KycStatus = 'not_started' | 'pending' | 'approved';
 type SaccoStatus = 'not_started' | 'enrolled';
@@ -50,21 +51,24 @@ const Home: React.FC = () => {
   const statusPill =
     kyc === 'approved' ? 'All checks complete' : kyc === 'pending' ? 'KYC under review - usually within 24 hours' : 'Finish setup to unlock all features';
 
-  const markKycApprovedForPreview = () => {
-    const token = sessionStorage.getItem('auth_token');
+  const markKycApprovedForPreview = async () => {
     const userRaw = sessionStorage.getItem('auth_user');
-    if (!token || !userRaw) return;
-    const adminSecret = String(import.meta.env.VITE_ADMIN_API_KEY || '').trim();
-    const parsed = JSON.parse(userRaw) as { id: string };
-    fetch(`${String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080')}/api/v1/admin/kyc?userId=${encodeURIComponent(parsed.id)}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        'X-Admin-Secret': adminSecret,
-      },
-      body: JSON.stringify({ status: 'approved', reviewedBy: 'web-admin-preview' }),
-    }).then(() => window.location.reload());
+    if (!userRaw) return;
+    
+    try {
+      const parsed = JSON.parse(userRaw) as { id: string };
+      await makeAdminRequest(
+        `/api/v1/admin/kyc?userId=${encodeURIComponent(parsed.id)}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'approved', reviewedBy: 'web-admin-preview' }),
+        }
+      );
+      window.location.reload();
+    } catch (error) {
+      console.error('Failed to approve KYC:', error);
+      alert('Failed to approve KYC. You may not have admin permissions.');
+    }
   };
 
   const markSaccoEnrolledForPreview = () => {

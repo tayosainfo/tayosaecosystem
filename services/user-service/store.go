@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 // Store persists identity, onboarding, and answers geo queries.
@@ -39,6 +40,11 @@ type Store interface {
 	ListAdminKYCQueue(status string, limit int) ([]AdminKYCQueueItem, error)
 	GetAdminSetting(key string) (map[string]any, bool, error)
 	SetAdminSetting(key string, value map[string]any) error
+	// User management methods
+	ListUsersWithFilters(search, statusFilter, kycFilter string, limit, offset int) ([]User, int, error)
+	UpdateUserStatus(userID, status, adminID, reason string) error
+	UpdateUserRole(userID, role, adminID string) error
+	GetUserActivity(userID string, since time.Time) ([]ActivityLog, error)
 	EnsureGeoSeeded() error
 	Ping() error
 	Close()

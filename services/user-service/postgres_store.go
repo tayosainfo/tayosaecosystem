@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -777,4 +778,238 @@ func (s *PostgresStore) FindUserIDByReferralCode(referralCode string) (string, b
 		return "", false
 	}
 	return userID, true
+}
+
+// ListUsersWithFilters returns paginated list of users with search and filtering
+func (s *PostgresStore) ListUsersWithFilters(search, statusFilter, kycFilter string, limit, offset int) ([]User, int, error) {
+	ctx := context.Background()
+	
+	// Build WHERE clause dynamically
+	whereClauses := []string{}
+	args := []any{}
+	argIdx := 1
+	
+	// Search filter (name, email, phone)
+	if strings.TrimSpace(search) != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf(`(
+			LOWER(u.full_name) LIKE LOWER($%d) OR
+			LOWER(u.auth_email) LIKE LOWER($%d) OR
+			LOWER(COALESCE(u.contact_email, '')) LIKE LOWER($%d) OR
+			u.phone_e164 LIKE $%d
+		)`, argIdx, argIdx, argIdx, argIdx))
+		searchPattern := "%" + strings.TrimSpace(search) + "%"
+		args = append(args, searchPattern)
+		argIdx++
+	}
+	
+	// Status filter
+	if strings.TrimSpace(statusFilter) != "" && statusFilter != "all" {
+		whereClauses = append(whereClauses, fmt.Sprintf(`COALESCE(u.status, 'active') = $%d`, argIdx))
+		args = append(args, statusFilter)
+		argIdx++
+	}
+	
+	// KYC status filter
+	if strings.TrimSpace(kycFilter) != "" && kycFilter != "all" {
+		whereClauses = append(whereClauses, fmt.Sprintf(`COALESCE(k.status, 'not_started') = $%d`, argIdx))
+		args = append(args, kycFilter)
+		argIdx++
+	}
+	
+	whereClause := ""
+	if len(whereClauses) > 0 {
+		whereClause = "WHERE " + strings.Join(whereClauses, " AND ")
+	}
+	
+	// Get total count
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM users_identity u
+		LEFT JOIN kyc_profiles k ON k.user_id = u.user_id
+		%s`, whereClause)
+	
+	var total int
+	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	
+	// Get paginated results
+	args = append(args, limit, offset)
+	query := fmt.Sprintf(`
+		SELECT u.user_id, u.full_name, u.phone_e164, u.auth_email, u.contact_email, 
+		       u.supabase_user_id, COALESCE(u.supabase_login_email,''),
+		       u.password_hash, u.phone_verified_at, u.contact_email_verified_at, 
+		       u.created_at, u.date_of_birth, u.nationality,
+		       COALESCE(u.role, 'user'), COALESCE(u.status, 'active'), 
+		       u.role_assigned_at, u.role_assigned_by, u.last_login
+		FROM users_identity u
+		LEFT JOIN kyc_profiles k ON k.user_id = u.user_id
+		%s
+		ORDER BY u.created_at DESC
+		LIMIT $%d OFFSET $%d`, whereClause, argIdx, argIdx+1)
+	
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	
+	var users []User
+	for rows.Next() {
+		var u User
+		var contact, supabaseID *string
+		var supabaseLogin string
+		var pwdHash *string
+		var phoneV, emailV *time.Time
+		var created time.Time
+		var dob *time.Time
+		var nat *string
+		var role, status string
+		var roleAssignedAt *time.Time
+		var roleAssignedBy *string
+		var lastLogin *time.Time
+		
+		err := rows.Scan(&u.ID, &u.FullName, &u.PhoneE164, &u.AuthEmail, &contact, &supabaseID, &supabaseLogin,
+			&pwdHash, &phoneV, &emailV, &created, &dob, &nat, &role, &status, &roleAssignedAt, &roleAssignedBy, &lastLogin)
+		if err != nil {
+			return nil, 0, err
+		}
+		
+		if contact != nil {
+			u.ContactEmail = *contact
+		}
+		if supabaseID != nil {
+			u.SupabaseUserID = *supabaseID
+		}
+		u.SupabaseLoginEmail = supabaseLogin
+		if pwdHash != nil {
+			u.PasswordHash = *pwdHash
+		}
+		if phoneV != nil {
+			u.PhoneVerifiedAt = *phoneV
+		}
+		u.ContactEmailChecked = emailV != nil
+		u.CreatedAt = created
+		if dob != nil {
+			t := *dob
+			u.DateOfBirth = &t
+		}
+		if nat != nil {
+			u.Nationality = *nat
+		}
+		u.Role = role
+		u.Status = status
+		if roleAssignedAt != nil {
+			t := *roleAssignedAt
+			u.RoleAssignedAt = &t
+		}
+		if roleAssignedBy != nil {
+			u.RoleAssignedBy = *roleAssignedBy
+		}
+		if lastLogin != nil {
+			t := *lastLogin
+			u.LastLogin = &t
+		}
+		
+		users = append(users, u)
+	}
+	
+	return users, total, rows.Err()
+}
+
+// UpdateUserStatus updates user account status
+func (s *PostgresStore) UpdateUserStatus(userID, status, adminID, reason string) error {
+	ctx := context.Background()
+	
+	// Update user status
+	_, err := s.pool.Exec(ctx, `
+		UPDATE users_identity 
+		SET status = $2, updated_at = now()
+		WHERE user_id = $1`,
+		userID, status)
+	
+	if err != nil {
+		return err
+	}
+	
+	// Log status change in audit table (if exists)
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO admin_audit_log (admin_id, action, target_user_id, details, created_at)
+		VALUES ($1, 'user_status_change', $2, $3, now())`,
+		adminID, userID, fmt.Sprintf("status changed to %s: %s", status, reason))
+	
+	return nil
+}
+
+// UpdateUserRole updates user role
+func (s *PostgresStore) UpdateUserRole(userID, role, adminID string) error {
+	ctx := context.Background()
+	
+	_, err := s.pool.Exec(ctx, `
+		UPDATE users_identity 
+		SET role = $2, role_assigned_at = now(), role_assigned_by = $3, updated_at = now()
+		WHERE user_id = $1`,
+		userID, role, adminID)
+	
+	return err
+}
+
+// GetUserActivity returns user activity log
+func (s *PostgresStore) GetUserActivity(userID string, since time.Time) ([]ActivityLog, error) {
+	ctx := context.Background()
+	
+	// Query activity from multiple sources
+	query := `
+		SELECT 
+			'login' as action,
+			'User logged in' as details,
+			created_at as timestamp,
+			'' as ip_address,
+			'' as device_info
+		FROM user_sessions
+		WHERE user_id = $1 AND created_at >= $2
+		
+		UNION ALL
+		
+		SELECT 
+			'status_change' as action,
+			details,
+			created_at as timestamp,
+			'' as ip_address,
+			'' as device_info
+		FROM admin_audit_log
+		WHERE target_user_id = $1 AND created_at >= $2
+		
+		UNION ALL
+		
+		SELECT 
+			action,
+			CONCAT('Role changed from ', previous_role, ' to ', new_role) as details,
+			created_at as timestamp,
+			'' as ip_address,
+			'' as device_info
+		FROM admin_role_audit
+		WHERE user_id = $1 AND created_at >= $2
+		
+		ORDER BY timestamp DESC
+		LIMIT 100`
+	
+	rows, err := s.pool.Query(ctx, query, userID, since)
+	if err != nil {
+		// If tables don't exist, return empty array
+		return []ActivityLog{}, nil
+	}
+	defer rows.Close()
+	
+	var activities []ActivityLog
+	for rows.Next() {
+		var a ActivityLog
+		err := rows.Scan(&a.Action, &a.Details, &a.Timestamp, &a.IPAddress, &a.DeviceInfo)
+		if err != nil {
+			return nil, err
+		}
+		activities = append(activities, a)
+	}
+	
+	return activities, rows.Err()
 }

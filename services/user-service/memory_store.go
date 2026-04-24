@@ -429,3 +429,105 @@ func geoDistinctFromRows(geoRows []geoRow, level, parent string) []string {
 	}
 	return values
 }
+
+// ListUsersWithFilters returns paginated list of users with search and filtering
+func (m *MemoryStore) ListUsersWithFilters(search, statusFilter, kycFilter string, limit, offset int) ([]User, int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	search = strings.ToLower(strings.TrimSpace(search))
+	statusFilter = strings.TrimSpace(statusFilter)
+	kycFilter = strings.TrimSpace(kycFilter)
+	
+	var filtered []User
+	for _, u := range m.usersByID {
+		// Apply search filter
+		if search != "" {
+			if !strings.Contains(strings.ToLower(u.FullName), search) &&
+				!strings.Contains(strings.ToLower(u.AuthEmail), search) &&
+				!strings.Contains(strings.ToLower(u.ContactEmail), search) &&
+				!strings.Contains(u.PhoneE164, search) {
+				continue
+			}
+		}
+		
+		// Apply status filter
+		userStatus := u.Status
+		if userStatus == "" {
+			userStatus = "active"
+		}
+		if statusFilter != "" && statusFilter != "all" && userStatus != statusFilter {
+			continue
+		}
+		
+		// Apply KYC filter
+		if kycFilter != "" && kycFilter != "all" {
+			kyc, ok := m.kycProfiles[u.ID]
+			kycStatus := "not_started"
+			if ok {
+				kycStatus = kyc.Status
+			}
+			if kycStatus != kycFilter {
+				continue
+			}
+		}
+		
+		filtered = append(filtered, u)
+	}
+	
+	total := len(filtered)
+	
+	// Apply pagination
+	if offset >= len(filtered) {
+		return []User{}, total, nil
+	}
+	
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	
+	return filtered[offset:end], total, nil
+}
+
+// UpdateUserStatus updates user account status
+func (m *MemoryStore) UpdateUserStatus(userID, status, adminID, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	u, ok := m.usersByID[userID]
+	if !ok {
+		return nil
+	}
+	
+	u.Status = status
+	m.indexUser(u)
+	
+	return nil
+}
+
+// UpdateUserRole updates user role
+func (m *MemoryStore) UpdateUserRole(userID, role, adminID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	u, ok := m.usersByID[userID]
+	if !ok {
+		return nil
+	}
+	
+	now := time.Now()
+	u.Role = role
+	u.RoleAssignedAt = &now
+	u.RoleAssignedBy = adminID
+	m.indexUser(u)
+	
+	return nil
+}
+
+// GetUserActivity returns user activity log
+func (m *MemoryStore) GetUserActivity(userID string, since time.Time) ([]ActivityLog, error) {
+	// In-memory store doesn't track activity logs
+	// Return empty array for now
+	return []ActivityLog{}, nil
+}

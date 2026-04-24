@@ -116,6 +116,13 @@ func main() {
 	mux.HandleFunc("POST /api/v1/onboarding/kibiina", requireAuth(onboardingKibiinaHandler))
 	mux.HandleFunc("/api/v1/admin/kyc", adminKYCDecisionHandler)
 	mux.HandleFunc("/api/v1/admin/settings", adminSettingsHandler)
+	// User management admin endpoints
+	mux.HandleFunc("GET /api/v1/admin/users", adminUsersListHandler)
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}", adminUserDetailHandler)
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", adminUserStatusHandler)
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/role", adminUserRoleHandler)
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/reset-password", adminUserResetPasswordHandler)
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}/activity", adminUserActivityHandler)
 	mux.HandleFunc("/api/v1/geo", geoLookupHandler)
 	mux.HandleFunc("/api/v1/groups/policy", parishGroupPolicyHandler)
 

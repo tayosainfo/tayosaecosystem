@@ -17,6 +17,12 @@ type User struct {
 	PhoneVerifiedAt     time.Time  `json:"phoneVerifiedAt,omitempty"`
 	ContactEmailChecked bool       `json:"contactEmailVerified"`
 	CreatedAt           time.Time  `json:"createdAt"`
+	// Role-based access control fields
+	Role           string     `json:"role,omitempty"`           // 'user' or 'admin'
+	Status         string     `json:"status,omitempty"`         // 'active', 'suspended', 'deactivated'
+	RoleAssignedAt *time.Time `json:"roleAssignedAt,omitempty"` // When role was assigned
+	RoleAssignedBy string     `json:"roleAssignedBy,omitempty"` // Admin who assigned role
+	LastLogin      *time.Time `json:"lastLogin,omitempty"`      // Last login timestamp
 }
 
 // GroupPolicyStats counts rows backing parish SACCO / village Kibiina policy.
@@ -129,4 +135,14 @@ type geoRow struct {
 	SubCounty string
 	Parish    string
 	Village   string
+}
+
+// ActivityLog represents a user activity event
+type ActivityLog struct {
+	ID         string    `json:"id"`
+	Action     string    `json:"action"`
+	Timestamp  time.Time `json:"timestamp"`
+	Details    string    `json:"details"`
+	IPAddress  string    `json:"ip_address,omitempty"`
+	DeviceInfo string    `json:"device_info,omitempty"`
 }

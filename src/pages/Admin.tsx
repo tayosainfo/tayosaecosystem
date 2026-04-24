@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { platformApi } from '../lib/platformApi';
+import React, { useEffect, useState } from 'react';
+import { useAdminStatus } from '../utils/auth';
+import { makeAdminRequest } from '../utils/api';
 
-type Tab = 'kyc' | 'fees';
+type Tab = 'kyc' | 'fees' | 'users';
 
 const Admin: React.FC = () => {
   const [tab, setTab] = useState<Tab>('kyc');
@@ -9,14 +10,12 @@ const Admin: React.FC = () => {
   const [items, setItems] = useState<any[]>([]);
   const [error, setError] = useState('');
   const [fees, setFees] = useState({ registrationFeeUGX: 0, saccoEntranceFeeUGX: 0, transactionFeePct: 0 });
-  const token = useMemo(() => sessionStorage.getItem('auth_token') || '', []);
-  const adminSecret = String(import.meta.env.VITE_ADMIN_API_KEY || '').trim();
+  const { isAdmin, loading } = useAdminStatus();
 
   const loadKyc = async () => {
-    if (!token || !adminSecret) return;
     setError('');
     try {
-      const res = await platformApi.adminListKyc(token, adminSecret, status);
+      const res = await makeAdminRequest(`/api/v1/admin/kyc?status=${status}`);
       setItems(res.items || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load KYC queue');
@@ -24,10 +23,9 @@ const Admin: React.FC = () => {
   };
 
   const loadFees = async () => {
-    if (!token || !adminSecret) return;
     setError('');
     try {
-      const res = await platformApi.adminGetFees(token, adminSecret);
+      const res = await makeAdminRequest('/api/v1/admin/settings?key=fees');
       const v = res.value || {};
       setFees({
         registrationFeeUGX: Number(v.registrationFeeUGX || 0),
@@ -40,16 +38,23 @@ const Admin: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!isAdmin || loading) return;
     if (tab === 'kyc') loadKyc();
     if (tab === 'fees') loadFees();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, status]);
+  }, [tab, status, isAdmin, loading]);
 
   const decide = async (userId: string, decision: 'approved' | 'rejected') => {
-    if (!token || !adminSecret) return;
     setError('');
     try {
-      await platformApi.adminDecideKyc(token, adminSecret, userId, decision);
+      await makeAdminRequest(`/api/v1/admin/kyc?userId=${userId}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          status: decision,
+          reviewNote: `${decision} by admin`,
+          reviewedBy: 'admin'
+        })
+      });
       await loadKyc();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to submit decision');
@@ -57,15 +62,38 @@ const Admin: React.FC = () => {
   };
 
   const saveFees = async () => {
-    if (!token || !adminSecret) return;
     setError('');
     try {
-      await platformApi.adminSetFees(token, adminSecret, fees as any);
+      await makeAdminRequest('/api/v1/admin/settings?key=fees', {
+        method: 'PATCH',
+        body: JSON.stringify(fees)
+      });
       await loadFees();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save fees');
     }
   };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 flex items-center justify-center">
+        <div className="text-white text-xl">Loading...</div>
+      </div>
+    );
+  }
+
+  // Show access denied if not admin
+  if (!isAdmin) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 flex items-center justify-center px-4">
+        <div className="bg-red-500/20 border border-red-400/50 text-red-100 px-6 py-4 rounded-xl max-w-md text-center">
+          <h2 className="text-xl font-bold mb-2">Access Denied</h2>
+          <p>You do not have admin privileges to access this page.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 py-10 px-4 sm:px-6 lg:px-8">
@@ -82,14 +110,11 @@ const Admin: React.FC = () => {
             <button onClick={() => setTab('fees')} className={`px-4 py-2 rounded-xl text-sm font-semibold ${tab === 'fees' ? 'bg-white text-blue-900' : 'bg-white/10 text-white border border-white/20'}`}>
               Fees & Charges
             </button>
+            <button onClick={() => window.location.href = '/admin/users'} className={`px-4 py-2 rounded-xl text-sm font-semibold bg-white/10 text-white border border-white/20 hover:bg-white/20`}>
+              Users
+            </button>
           </div>
         </div>
-
-        {!adminSecret && (
-          <div className="bg-red-500/20 border border-red-400/50 text-red-100 px-4 py-3 rounded-xl">
-            Missing `VITE_ADMIN_API_KEY` in `.env`. Set it to the same value as `ADMIN_API_KEY` and restart the frontend.
-          </div>
-        )}
 
         {error && (
           <div className="bg-red-500/20 border border-red-400/50 text-red-100 px-4 py-3 rounded-xl">{error}</div>
@@ -162,4 +187,3 @@ const Admin: React.FC = () => {
 };
 
 export default Admin;
-

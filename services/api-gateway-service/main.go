@@ -327,20 +327,18 @@ func main() {
 				http.NotFound(w, r)
 				return
 			}
-			if rt.path == "/api/v1/admin/kyc" || rt.path == "/api/v1/admin/settings" {
-				adminSecret := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
-				if adminSecret == "" || strings.TrimSpace(r.Header.Get("X-Admin-Secret")) != adminSecret {
-					writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "admin authentication failed"})
-					return
-				}
-			}
 			forward(w, r, rt.base)
 		}
 		
-		// Apply authentication middleware to protected routes
-		if !rt.public {
+		// Apply appropriate middleware based on route type
+		if rt.path == "/api/v1/admin/kyc" || rt.path == "/api/v1/admin/settings" {
+			// Admin routes use requireAdminWithFallback for migration support
+			mux.HandleFunc(rt.path, requireAdminWithFallback(handler))
+		} else if !rt.public {
+			// Protected routes use standard auth
 			mux.HandleFunc(rt.path, requireAuth(handler))
 		} else {
+			// Public routes have no auth
 			mux.HandleFunc(rt.path, handler)
 		}
 	}
