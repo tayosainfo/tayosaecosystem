@@ -124,6 +124,18 @@ CREATE TABLE IF NOT EXISTS kyc_profiles (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- KYC documents table (stores references to files in Supabase storage)
+CREATE TABLE IF NOT EXISTS kyc_documents (
+  id BIGSERIAL PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users_identity(user_id) ON DELETE CASCADE,
+  doc_type TEXT NOT NULL,
+  doc_side TEXT NULL,
+  storage_key TEXT NOT NULL,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_kyc_documents_user ON kyc_documents(user_id);
+CREATE INDEX IF NOT EXISTS idx_kyc_documents_type ON kyc_documents(doc_type);
+
 -- SACCO membership details
 CREATE TABLE IF NOT EXISTS sacco_memberships (
   user_id TEXT PRIMARY KEY REFERENCES users_identity(user_id),
