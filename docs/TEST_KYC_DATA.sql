@@ -36,7 +36,7 @@ SELECT
     ui.full_name,
     ui.contact_email
 FROM public.kyc_documents kd
-LEFT JOIN public.users_identity ui ON kd.user_id = ui.id
+LEFT JOIN public.users_identity ui ON kd.user_id = ui.user_id
 ORDER BY kd.uploaded_at DESC
 LIMIT 20;
 
@@ -59,7 +59,7 @@ LIMIT 20;
 -- 4. COMPLETE KYC VIEW (Profile + Documents + User Info)
 -- ============================================================================
 SELECT 
-    ui.id AS user_id,
+    ui.user_id,
     ui.full_name,
     ui.contact_email,
     ui.phone_e164,
@@ -70,10 +70,10 @@ SELECT
     kp.reviewed_at,
     COUNT(kd.id) AS document_count
 FROM public.users_identity ui
-LEFT JOIN public.kyc_profiles kp ON ui.id = kp.user_id
-LEFT JOIN public.kyc_documents kd ON ui.id = kd.user_id
+LEFT JOIN public.kyc_profiles kp ON ui.user_id = kp.user_id
+LEFT JOIN public.kyc_documents kd ON ui.user_id = kd.user_id
 WHERE kp.user_id IS NOT NULL
-GROUP BY ui.id, ui.full_name, ui.contact_email, ui.phone_e164, 
+GROUP BY ui.user_id, ui.full_name, ui.contact_email, ui.phone_e164, 
          kp.status, kp.id_type, kp.id_number, kp.submitted_at, kp.reviewed_at
 ORDER BY kp.submitted_at DESC;
 
@@ -81,7 +81,7 @@ ORDER BY kp.submitted_at DESC;
 -- 5. CHECK SPECIFIC USER'S KYC DATA (Replace YOUR_USER_ID)
 -- ============================================================================
 -- First, find your user ID:
-SELECT id, full_name, contact_email, phone_e164 
+SELECT user_id, full_name, contact_email, phone_e164 
 FROM public.users_identity 
 WHERE contact_email = 'YOUR_EMAIL@example.com';
 
@@ -122,7 +122,7 @@ SELECT
     kp.submitted_at,
     COUNT(kd.id) AS documents_uploaded
 FROM public.kyc_profiles kp
-JOIN public.users_identity ui ON kp.user_id = ui.id
+JOIN public.users_identity ui ON kp.user_id = ui.user_id
 LEFT JOIN public.kyc_documents kd ON kp.user_id = kd.user_id
 WHERE kp.submitted_at > NOW() - INTERVAL '24 hours'
 GROUP BY ui.full_name, ui.contact_email, kp.status, kp.id_type, kp.submitted_at
@@ -167,7 +167,7 @@ SELECT
     kp.submitted_at,
     COUNT(kd.id) AS document_count
 FROM public.kyc_profiles kp
-JOIN public.users_identity ui ON kp.user_id = ui.id
+JOIN public.users_identity ui ON kp.user_id = ui.user_id
 LEFT JOIN public.kyc_documents kd ON kp.user_id = kd.user_id
 GROUP BY kp.user_id, ui.full_name, ui.contact_email, kp.status, kp.submitted_at
 HAVING COUNT(kd.id) < 3  -- Should have 3 documents (ID front, ID back, selfie)
