@@ -359,8 +359,8 @@ func main() {
 	}
 
 	// Eagerly verify bucket exists at startup.
-	if bearer, ok := supabaseAdminBearer(); ok {
-		go ensureBucket(storageBucket(), bearer)
+	if adminBearer, ok := supabaseAdminBearer(); ok {
+		go ensureBucket(storageBucket(), adminBearer)
 	} else {
 		log.Print("WARNING: SUPABASE_SERVICE_ROLE_KEY not set — bucket creation will fail")
 	}
