@@ -114,18 +114,6 @@ func main() {
 	mux.HandleFunc("POST /api/v1/onboarding/kyc", requireAuth(onboardingKYCHandler))
 	mux.HandleFunc("POST /api/v1/onboarding/sacco", requireAuth(onboardingSaccoHandler))
 	mux.HandleFunc("POST /api/v1/onboarding/kibiina", requireAuth(onboardingKibiinaHandler))
-	mux.HandleFunc("GET /api/v1/admin/kyc", adminKYCDecisionHandler)
-	mux.HandleFunc("POST /api/v1/admin/kyc", adminKYCDecisionHandler)
-	mux.HandleFunc("GET /api/v1/admin/settings", adminSettingsHandler)
-	mux.HandleFunc("PATCH /api/v1/admin/settings", adminSettingsHandler)
-	mux.HandleFunc("POST /api/v1/admin/check-status", adminCheckStatusHandler)
-	// User management admin endpoints - wrapped with requireAdminAuth
-	mux.HandleFunc("GET /api/v1/admin/users", requireAdminAuth(adminUsersListHandler))
-	mux.HandleFunc("GET /api/v1/admin/users/{userId}", requireAdminAuth(adminUserDetailHandler))
-	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", requireAdminAuth(adminUserStatusHandler))
-	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/role", requireAdminAuth(adminUserRoleHandler))
-	mux.HandleFunc("POST /api/v1/admin/users/{userId}/reset-password", requireAdminAuth(adminUserResetPasswordHandler))
-	mux.HandleFunc("GET /api/v1/admin/users/{userId}/activity", requireAdminAuth(adminUserActivityHandler))
 	mux.HandleFunc("GET /api/v1/geo", geoLookupHandler)
 	mux.HandleFunc("GET /api/v1/groups/policy", parishGroupPolicyHandler)
 

@@ -851,7 +851,7 @@ func onboardingKYCHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	kyc := KYCProfile{
 		UserID:                     uid,
-		Status:                     "pending",
+		Status:                     "approved", // Auto-approve KYC upon submission
 		DateOfBirth:                dob,
 		Gender:                     strings.TrimSpace(req.Gender),
 		Nationality:                nat,
@@ -866,6 +866,9 @@ func onboardingKYCHandler(w http.ResponseWriter, r *http.Request) {
 		PEPStatus:                  req.PEPStatus,
 		SACCOMembershipDisclosures: strings.TrimSpace(req.SACCOMembershipDisclosures),
 		SubmittedAt:                &now,
+		ReviewedAt:                 &now, // Auto-approved immediately
+		ReviewedBy:                 "system_auto_approval",
+		ReviewNote:                 "Automatically approved upon submission",
 	}
 	if err := activeStore.UpsertKYCProfile(kyc); err != nil {
 		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -877,9 +880,9 @@ func onboardingKYCHandler(w http.ResponseWriter, r *http.Request) {
 		{DocType: "selfie", StorageKey: strings.TrimSpace(req.SelfieKey)},
 	}
 	_ = activeStore.ReplaceKYCDocuments(uid, docs)
-	emitAudit(uid, "kyc_submit", "kyc", "kyc submitted")
+	emitAudit(uid, "kyc_approved", "kyc", "kyc auto-approved upon submission")
 	if u, ok := activeStore.FindByUserID(uid); ok && u.ContactEmail != "" {
-		emitNotification("email", u.ContactEmail, "kyc_submitted")
+		emitNotification("email", u.ContactEmail, "kyc_approved")
 	}
 	respond(w, http.StatusAccepted, map[string]any{"kyc": kyc, "documents": docs})
 }
@@ -998,90 +1001,6 @@ func onboardingKibiinaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	emitAudit(uid, "kibiina_setup", "kibiina", "kibiina preference captured")
 	respond(w, http.StatusOK, map[string]any{"kibiina": p})
-}
-
-func adminKYCDecisionHandler(w http.ResponseWriter, r *http.Request) {
-	adminSecret := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
-	if adminSecret == "" || strings.TrimSpace(r.Header.Get("X-Admin-Secret")) != adminSecret {
-		respond(w, http.StatusUnauthorized, map[string]any{"error": "admin authentication failed"})
-		return
-	}
-	if r.Method == http.MethodGet {
-		status := strings.TrimSpace(r.URL.Query().Get("status"))
-		limit := 50
-		items, err := activeStore.ListAdminKYCQueue(status, limit)
-		if err != nil {
-			respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		respond(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
-		return
-	}
-	var req struct {
-		Status     string `json:"status"`
-		ReviewNote string `json:"reviewNote"`
-		ReviewedBy string `json:"reviewedBy"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-	if req.Status != "approved" && req.Status != "rejected" {
-		respond(w, http.StatusBadRequest, map[string]any{"error": "status must be approved or rejected"})
-		return
-	}
-	userID := strings.TrimSpace(r.URL.Query().Get("userId"))
-	if userID == "" {
-		respond(w, http.StatusBadRequest, map[string]any{"error": "userId query parameter is required"})
-		return
-	}
-	if err := activeStore.SetKYCDecision(userID, req.Status, strings.TrimSpace(req.ReviewedBy), strings.TrimSpace(req.ReviewNote)); err != nil {
-		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	emitAudit(firstNonEmpty(req.ReviewedBy, "admin"), "kyc_"+req.Status, "kyc", "admin decision")
-	if u, ok := activeStore.FindByUserID(userID); ok && u.ContactEmail != "" {
-		emitNotification("email", u.ContactEmail, "kyc_"+req.Status)
-	}
-	respond(w, http.StatusOK, map[string]any{"status": req.Status, "userId": userID})
-}
-
-func adminSettingsHandler(w http.ResponseWriter, r *http.Request) {
-	adminSecret := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
-	if adminSecret == "" || strings.TrimSpace(r.Header.Get("X-Admin-Secret")) != adminSecret {
-		respond(w, http.StatusUnauthorized, map[string]any{"error": "admin authentication failed"})
-		return
-	}
-	key := strings.TrimSpace(r.URL.Query().Get("key"))
-	if key == "" {
-		key = "fees"
-	}
-	switch r.Method {
-	case http.MethodGet:
-		v, ok, err := activeStore.GetAdminSetting(key)
-		if err != nil {
-			respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		if !ok {
-			v = map[string]any{}
-		}
-		respond(w, http.StatusOK, map[string]any{"key": key, "value": v})
-	case http.MethodPatch, http.MethodPost:
-		var body map[string]any
-		if err := decodeJSON(r, &body); err != nil {
-			respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-			return
-		}
-		if err := activeStore.SetAdminSetting(key, body); err != nil {
-			respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		emitAudit("admin", "admin_setting_update", "admin_settings:"+key, "updated")
-		respond(w, http.StatusOK, map[string]any{"ok": true})
-	default:
-		respond(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
-	}
 }
 
 func geoLookupHandler(w http.ResponseWriter, r *http.Request) {
