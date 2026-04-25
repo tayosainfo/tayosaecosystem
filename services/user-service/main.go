@@ -119,13 +119,13 @@ func main() {
 	mux.HandleFunc("GET /api/v1/admin/settings", adminSettingsHandler)
 	mux.HandleFunc("PATCH /api/v1/admin/settings", adminSettingsHandler)
 	mux.HandleFunc("POST /api/v1/admin/check-status", adminCheckStatusHandler)
-	// User management admin endpoints - wrapped with requireAuth
-	mux.HandleFunc("GET /api/v1/admin/users", requireAuth(adminUsersListHandler))
-	mux.HandleFunc("GET /api/v1/admin/users/{userId}", requireAuth(adminUserDetailHandler))
-	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", requireAuth(adminUserStatusHandler))
-	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/role", requireAuth(adminUserRoleHandler))
-	mux.HandleFunc("POST /api/v1/admin/users/{userId}/reset-password", requireAuth(adminUserResetPasswordHandler))
-	mux.HandleFunc("GET /api/v1/admin/users/{userId}/activity", requireAuth(adminUserActivityHandler))
+	// User management admin endpoints - wrapped with requireAdminAuth
+	mux.HandleFunc("GET /api/v1/admin/users", requireAdminAuth(adminUsersListHandler))
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}", requireAdminAuth(adminUserDetailHandler))
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", requireAdminAuth(adminUserStatusHandler))
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/role", requireAdminAuth(adminUserRoleHandler))
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/reset-password", requireAdminAuth(adminUserResetPasswordHandler))
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}/activity", requireAdminAuth(adminUserActivityHandler))
 	mux.HandleFunc("GET /api/v1/geo", geoLookupHandler)
 	mux.HandleFunc("GET /api/v1/groups/policy", parishGroupPolicyHandler)
 
