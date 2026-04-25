@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { LogOut } from 'lucide-react';
 import { useAdminStatus } from '../utils/auth';
 import { makeAdminRequest } from '../utils/api';
+import { useAuth } from '../hooks/useAuth';
 
 type Tab = 'kyc' | 'fees' | 'users';
 
@@ -11,6 +13,7 @@ const Admin: React.FC = () => {
   const [error, setError] = useState('');
   const [fees, setFees] = useState({ registrationFeeUGX: 0, saccoEntranceFeeUGX: 0, transactionFeePct: 0 });
   const { isAdmin, loading } = useAdminStatus();
+  const { logout } = useAuth();
 
   const loadKyc = async () => {
     setError('');
@@ -112,6 +115,16 @@ const Admin: React.FC = () => {
             </button>
             <button onClick={() => window.location.href = '/admin/users'} className={`px-4 py-2 rounded-xl text-sm font-semibold bg-white/10 text-white border border-white/20 hover:bg-white/20`}>
               Users
+            </button>
+            <button
+              onClick={() => {
+                logout();
+                window.location.href = '/login';
+              }}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700 transition"
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
             </button>
           </div>
         </div>

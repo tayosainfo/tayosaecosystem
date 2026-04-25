@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Search, ChevronLeft, ChevronRight, User as UserIcon } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, User as UserIcon, LogOut } from 'lucide-react';
 import { makeAdminRequest } from '../../utils/api';
+import { useAuth } from '../../hooks/useAuth';
 
 interface User {
   user_id: string;
@@ -29,6 +30,7 @@ const Users: React.FC = () => {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { logout } = useAuth();
 
   // Filters
   const [search, setSearch] = useState('');
@@ -122,11 +124,23 @@ const Users: React.FC = () => {
     <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            Manage user accounts, roles, and permissions
-          </p>
+        <div className="mb-8 flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
+            <p className="mt-2 text-sm text-gray-600">
+              Manage user accounts, roles, and permissions
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              logout();
+              window.location.href = '/login';
+            }}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition"
+          >
+            <LogOut className="h-4 w-4" />
+            Logout
+          </button>
         </div>
 
         {/* Search and Filters */}

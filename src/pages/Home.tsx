@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Clock3, Lock, ArrowRight, Users, PiggyBank, Landmark, Wallet } from 'lucide-react';
+import { CheckCircle2, Clock3, Lock, ArrowRight, Users, PiggyBank, Landmark, Wallet, LogOut } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { platformApi } from '../lib/platformApi';
 import { makeAdminRequest } from '../utils/api';
@@ -8,7 +8,7 @@ type KycStatus = 'not_started' | 'pending' | 'approved';
 type SaccoStatus = 'not_started' | 'enrolled';
 
 const Home: React.FC = () => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [kyc, setKyc] = useState<KycStatus>('not_started');
   const [sacco, setSacco] = useState<SaccoStatus>('not_started');
   const [shares, setShares] = useState(0);
@@ -91,25 +91,37 @@ const Home: React.FC = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 py-10 px-4 sm:px-6 lg:px-8">
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 p-6 md:p-8 text-white">
-          <p className="text-sm text-blue-100">{statusPill}</p>
-          <div className="mt-2 flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+          <div className="flex justify-between items-start mb-4">
             <div>
-              <h1 className="text-4xl font-bold">UGX 0</h1>
-              <p className="text-blue-100">Welcome, {user?.firstName || 'Member'}</p>
+              <p className="text-sm text-blue-100">{statusPill}</p>
+              <div className="mt-2">
+                <h1 className="text-4xl font-bold">UGX 0</h1>
+                <p className="text-blue-100">Welcome, {user?.firstName || 'Member'}</p>
+              </div>
             </div>
-            <div className="flex gap-2">
-              {kyc !== 'approved' && (
-                <button onClick={markKycApprovedForPreview} className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white text-blue-900 font-semibold hover:bg-blue-50 transition">Approve KYC (preview)</button>
-              )}
-              {sacco !== 'enrolled' && (
-                <button
-                  onClick={markSaccoEnrolledForPreview}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white text-blue-900 font-semibold hover:bg-blue-50 transition"
-                >
-                  Enrol SACCO (preview)
-                </button>
-              )}
-            </div>
+            <button
+              onClick={() => {
+                logout();
+                window.location.href = '/login';
+              }}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-700 transition"
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
+            </button>
+          </div>
+          <div className="flex gap-2 mt-4">
+            {kyc !== 'approved' && (
+              <button onClick={markKycApprovedForPreview} className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white text-blue-900 font-semibold hover:bg-blue-50 transition">Approve KYC (preview)</button>
+            )}
+            {sacco !== 'enrolled' && (
+              <button
+                onClick={markSaccoEnrolledForPreview}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white text-blue-900 font-semibold hover:bg-blue-50 transition"
+              >
+                Enrol SACCO (preview)
+              </button>
+            )}
           </div>
         </div>
 
