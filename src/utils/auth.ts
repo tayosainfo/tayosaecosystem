@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
+import { checkAdminStatusViaBackend } from './adminApi';
 
 export interface UserRole {
   isAdmin: boolean;
@@ -9,40 +9,14 @@ export interface UserRole {
 
 /**
  * Check if current user has admin role
- * Extracts role from database based on app user email
+ * Calls backend endpoint to avoid Supabase RLS/API issues
  */
 export async function checkAdminStatus(): Promise<UserRole> {
   try {
-    // Get the current user from app context
-    const authToken = sessionStorage.getItem('auth_user');
-    if (!authToken) {
-      return { isAdmin: false, role: 'user' };
-    }
-
-    const user = JSON.parse(authToken);
-    const userEmail = user.email;
-
-    if (!userEmail) {
-      return { isAdmin: false, role: 'user' };
-    }
-
-    // Query database for user role
-    const { data, error } = await supabase
-      .from('users_identity')
-      .select('role')
-      .eq('auth_email', userEmail)
-      .single();
-
-    if (error || !data) {
-      console.error('Failed to fetch user role:', error);
-      return { isAdmin: false, role: 'user' };
-    }
-
-    const userRole = data.role || 'user';
-    
+    const result = await checkAdminStatusViaBackend();
     return {
-      isAdmin: userRole === 'admin',
-      role: userRole
+      isAdmin: result.isAdmin,
+      role: result.role
     };
   } catch (error) {
     console.error('Failed to check admin status:', error);

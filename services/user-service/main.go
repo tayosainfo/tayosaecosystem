@@ -116,6 +116,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/onboarding/kibiina", requireAuth(onboardingKibiinaHandler))
 	mux.HandleFunc("/api/v1/admin/kyc", adminKYCDecisionHandler)
 	mux.HandleFunc("/api/v1/admin/settings", adminSettingsHandler)
+	mux.HandleFunc("POST /api/v1/admin/check-status", adminCheckStatusHandler)
 	// User management admin endpoints
 	mux.HandleFunc("GET /api/v1/admin/users", adminUsersListHandler)
 	mux.HandleFunc("GET /api/v1/admin/users/{userId}", adminUserDetailHandler)

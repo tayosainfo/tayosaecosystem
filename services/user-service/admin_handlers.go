@@ -8,6 +8,42 @@ import (
 	"time"
 )
 
+// adminCheckStatusHandler handles POST /api/v1/admin/check-status
+// Checks if the current user has admin role
+func adminCheckStatusHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	
+	if strings.TrimSpace(req.Email) == "" {
+		respond(w, http.StatusBadRequest, map[string]any{"error": "email is required"})
+		return
+	}
+	
+	// Find user by email
+	user, ok := activeStore.FindByEmail(req.Email)
+	if !ok {
+		// User not found - return non-admin status
+		respond(w, http.StatusOK, map[string]any{
+			"isAdmin": false,
+			"role":    "user",
+			"email":   req.Email,
+		})
+		return
+	}
+	
+	// Return user's role
+	respond(w, http.StatusOK, map[string]any{
+		"isAdmin": user.Role == "admin",
+		"role":    user.Role,
+		"email":   user.AuthEmail,
+	})
+}
+
 // adminUsersListHandler handles GET /api/v1/admin/users
 // Returns paginated list of users with search and filtering
 func adminUsersListHandler(w http.ResponseWriter, r *http.Request) {
