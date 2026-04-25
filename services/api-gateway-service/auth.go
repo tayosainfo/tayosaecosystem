@@ -52,18 +52,27 @@ func extractRoleFromJWT(token string) (string, error) {
 		AppMetadata struct {
 			UserRole string `json:"user_role"`
 		} `json:"app_metadata"`
+		UserMetadata struct {
+			UserRole string `json:"user_role"`
+		} `json:"user_metadata"`
 	}
 
 	if err := json.NewDecoder(strings.NewReader(string(body))).Decode(&userData); err != nil {
 		return "", err
 	}
 
-	// Default to 'user' if role not found
-	if userData.AppMetadata.UserRole == "" {
-		return "user", nil
+	// Try app_metadata first (custom claims hook adds it here)
+	if userData.AppMetadata.UserRole != "" {
+		return userData.AppMetadata.UserRole, nil
 	}
 
-	return userData.AppMetadata.UserRole, nil
+	// Try user_metadata as fallback
+	if userData.UserMetadata.UserRole != "" {
+		return userData.UserMetadata.UserRole, nil
+	}
+
+	// Default to 'user' if role not found
+	return "user", nil
 }
 
 // requireAdmin middleware checks if user has admin role
