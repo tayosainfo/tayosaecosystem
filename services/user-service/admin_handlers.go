@@ -50,6 +50,20 @@ func adminCheckStatusHandler(w http.ResponseWriter, r *http.Request) {
 // adminUsersListHandler handles GET /api/v1/admin/users
 // Returns paginated list of users with search and filtering
 func adminUsersListHandler(w http.ResponseWriter, r *http.Request) {
+	// Check if user is authenticated and is admin
+	userID := authedUserID(r)
+	if userID == "" {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "Not authenticated"})
+		return
+	}
+	
+	// Get user and check if admin
+	user, ok := activeStore.FindByUserID(userID)
+	if !ok || user.Role != "admin" {
+		respond(w, http.StatusForbidden, map[string]any{"error": "Insufficient permissions"})
+		return
+	}
+	
 	// Parse query parameters
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
@@ -108,40 +122,54 @@ func adminUsersListHandler(w http.ResponseWriter, r *http.Request) {
 // adminUserDetailHandler handles GET /api/v1/admin/users/{userId}
 // Returns comprehensive user information
 func adminUserDetailHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.PathValue("userId")
+	// Check if user is authenticated and is admin
+	userID := authedUserID(r)
 	if userID == "" {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "Not authenticated"})
+		return
+	}
+	
+	// Get user and check if admin
+	user, ok := activeStore.FindByUserID(userID)
+	if !ok || user.Role != "admin" {
+		respond(w, http.StatusForbidden, map[string]any{"error": "Insufficient permissions"})
+		return
+	}
+	
+	targetUserID := r.PathValue("userId")
+	if targetUserID == "" {
 		respond(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})
 		return
 	}
 	
 	// Get user from store
-	user, ok := activeStore.FindByUserID(userID)
+	targetUser, ok := activeStore.FindByUserID(targetUserID)
 	if !ok {
 		respond(w, http.StatusNotFound, map[string]any{"error": "user not found"})
 		return
 	}
 	
 	// Get related data
-	kyc, _ := activeStore.GetKYCProfile(userID)
-	onboarding, _ := activeStore.GetOnboarding(userID)
-	sacco, _ := activeStore.GetSaccoMembership(userID)
-	kibiina, _ := activeStore.GetKibiinaPreference(userID)
+	kyc, _ := activeStore.GetKYCProfile(targetUserID)
+	onboarding, _ := activeStore.GetOnboarding(targetUserID)
+	sacco, _ := activeStore.GetSaccoMembership(targetUserID)
+	kibiina, _ := activeStore.GetKibiinaPreference(targetUserID)
 	
 	respond(w, http.StatusOK, map[string]any{
 		"user": map[string]any{
-			"user_id":           user.ID,
-			"full_name":         user.FullName,
-			"auth_email":        user.AuthEmail,
-			"phone_e164":        user.PhoneE164,
-			"contact_email":     user.ContactEmail,
-			"role":              user.Role,
-			"status":            user.Status,
-			"created_at":        user.CreatedAt.Format(time.RFC3339),
-			"last_login":        formatOptionalTime(user.LastLogin),
-			"role_assigned_at":  formatOptionalTime(user.RoleAssignedAt),
-			"role_assigned_by":  user.RoleAssignedBy,
-			"date_of_birth":     formatOptionalDate(user.DateOfBirth),
-			"nationality":       user.Nationality,
+			"user_id":           targetUser.ID,
+			"full_name":         targetUser.FullName,
+			"auth_email":        targetUser.AuthEmail,
+			"phone_e164":        targetUser.PhoneE164,
+			"contact_email":     targetUser.ContactEmail,
+			"role":              targetUser.Role,
+			"status":            targetUser.Status,
+			"created_at":        targetUser.CreatedAt.Format(time.RFC3339),
+			"last_login":        formatOptionalTime(targetUser.LastLogin),
+			"role_assigned_at":  formatOptionalTime(targetUser.RoleAssignedAt),
+			"role_assigned_by":  targetUser.RoleAssignedBy,
+			"date_of_birth":     formatOptionalDate(targetUser.DateOfBirth),
+			"nationality":       targetUser.Nationality,
 		},
 		"kyc": map[string]any{
 			"status":       kyc.Status,
@@ -165,6 +193,20 @@ func adminUserDetailHandler(w http.ResponseWriter, r *http.Request) {
 // adminUserStatusHandler handles PATCH /api/v1/admin/users/{userId}/status
 // Updates user account status
 func adminUserStatusHandler(w http.ResponseWriter, r *http.Request) {
+	// Check if user is authenticated and is admin
+	adminUserID := authedUserID(r)
+	if adminUserID == "" {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "Not authenticated"})
+		return
+	}
+	
+	// Get user and check if admin
+	adminUser, ok := activeStore.FindByUserID(adminUserID)
+	if !ok || adminUser.Role != "admin" {
+		respond(w, http.StatusForbidden, map[string]any{"error": "Insufficient permissions"})
+		return
+	}
+	
 	userID := r.PathValue("userId")
 	if userID == "" {
 		respond(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})
@@ -192,17 +234,14 @@ func adminUserStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// Get admin user ID from context (set by middleware)
-	adminID := authedUserID(r)
-	
 	// Update user status
-	if err := activeStore.UpdateUserStatus(userID, req.Status, adminID, req.Reason); err != nil {
+	if err := activeStore.UpdateUserStatus(userID, req.Status, adminUserID, req.Reason); err != nil {
 		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 	
 	// Log audit event
-	emitAudit(adminID, "user_status_change", "user:"+userID, fmt.Sprintf("status changed to %s: %s", req.Status, req.Reason))
+	emitAudit(adminUserID, "user_status_change", "user:"+userID, fmt.Sprintf("status changed to %s: %s", req.Status, req.Reason))
 	
 	// TODO: If suspended, invalidate user sessions via Supabase Admin API
 	
@@ -216,6 +255,20 @@ func adminUserStatusHandler(w http.ResponseWriter, r *http.Request) {
 // adminUserRoleHandler handles PATCH /api/v1/admin/users/{userId}/role
 // Updates user role (admin/user)
 func adminUserRoleHandler(w http.ResponseWriter, r *http.Request) {
+	// Check if user is authenticated and is admin
+	adminUserID := authedUserID(r)
+	if adminUserID == "" {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "Not authenticated"})
+		return
+	}
+	
+	// Get user and check if admin
+	adminUser, ok := activeStore.FindByUserID(adminUserID)
+	if !ok || adminUser.Role != "admin" {
+		respond(w, http.StatusForbidden, map[string]any{"error": "Insufficient permissions"})
+		return
+	}
+	
 	userID := r.PathValue("userId")
 	if userID == "" {
 		respond(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})
@@ -236,11 +289,8 @@ func adminUserRoleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// Get admin user ID from context
-	adminID := authedUserID(r)
-	
 	// Update user role
-	if err := activeStore.UpdateUserRole(userID, req.Role, adminID); err != nil {
+	if err := activeStore.UpdateUserRole(userID, req.Role, adminUserID); err != nil {
 		respond(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -250,7 +300,7 @@ func adminUserRoleHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "user" {
 		action = "role_revoked"
 	}
-	emitAudit(adminID, action, "user:"+userID, fmt.Sprintf("role changed to %s", req.Role))
+	emitAudit(adminUserID, action, "user:"+userID, fmt.Sprintf("role changed to %s", req.Role))
 	
 	respond(w, http.StatusOK, map[string]any{
 		"userId": userID,
@@ -262,6 +312,20 @@ func adminUserRoleHandler(w http.ResponseWriter, r *http.Request) {
 // adminUserResetPasswordHandler handles POST /api/v1/admin/users/{userId}/reset-password
 // Triggers password reset email for user
 func adminUserResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	// Check if user is authenticated and is admin
+	adminUserID := authedUserID(r)
+	if adminUserID == "" {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "Not authenticated"})
+		return
+	}
+	
+	// Get user and check if admin
+	adminUser, ok := activeStore.FindByUserID(adminUserID)
+	if !ok || adminUser.Role != "admin" {
+		respond(w, http.StatusForbidden, map[string]any{"error": "Insufficient permissions"})
+		return
+	}
+	
 	userID := r.PathValue("userId")
 	if userID == "" {
 		respond(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})
@@ -275,9 +339,6 @@ func adminUserResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// Get admin user ID
-	adminID := authedUserID(r)
-	
 	// Trigger password reset via Supabase
 	if supabaseConfigured() {
 		email := supabaseLoginEmail(user)
@@ -289,7 +350,7 @@ func adminUserResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Log audit event
-	emitAudit(adminID, "admin_password_reset", "user:"+userID, "admin triggered password reset")
+	emitAudit(adminUserID, "admin_password_reset", "user:"+userID, "admin triggered password reset")
 	
 	respond(w, http.StatusOK, map[string]any{
 		"message": "Password reset email sent to user",
@@ -299,6 +360,20 @@ func adminUserResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 // adminUserActivityHandler handles GET /api/v1/admin/users/{userId}/activity
 // Returns user activity log
 func adminUserActivityHandler(w http.ResponseWriter, r *http.Request) {
+	// Check if user is authenticated and is admin
+	adminUserID := authedUserID(r)
+	if adminUserID == "" {
+		respond(w, http.StatusUnauthorized, map[string]any{"error": "Not authenticated"})
+		return
+	}
+	
+	// Get user and check if admin
+	adminUser, ok := activeStore.FindByUserID(adminUserID)
+	if !ok || adminUser.Role != "admin" {
+		respond(w, http.StatusForbidden, map[string]any{"error": "Insufficient permissions"})
+		return
+	}
+	
 	userID := r.PathValue("userId")
 	if userID == "" {
 		respond(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})

@@ -117,13 +117,13 @@ func main() {
 	mux.HandleFunc("/api/v1/admin/kyc", adminKYCDecisionHandler)
 	mux.HandleFunc("/api/v1/admin/settings", adminSettingsHandler)
 	mux.HandleFunc("POST /api/v1/admin/check-status", adminCheckStatusHandler)
-	// User management admin endpoints
-	mux.HandleFunc("GET /api/v1/admin/users", adminUsersListHandler)
-	mux.HandleFunc("GET /api/v1/admin/users/{userId}", adminUserDetailHandler)
-	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", adminUserStatusHandler)
-	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/role", adminUserRoleHandler)
-	mux.HandleFunc("POST /api/v1/admin/users/{userId}/reset-password", adminUserResetPasswordHandler)
-	mux.HandleFunc("GET /api/v1/admin/users/{userId}/activity", adminUserActivityHandler)
+	// User management admin endpoints - wrapped with requireAuth
+	mux.HandleFunc("GET /api/v1/admin/users", requireAuth(adminUsersListHandler))
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}", requireAuth(adminUserDetailHandler))
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", requireAuth(adminUserStatusHandler))
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/role", requireAuth(adminUserRoleHandler))
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/reset-password", requireAuth(adminUserResetPasswordHandler))
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}/activity", requireAuth(adminUserActivityHandler))
 	mux.HandleFunc("/api/v1/geo", geoLookupHandler)
 	mux.HandleFunc("/api/v1/groups/policy", parishGroupPolicyHandler)
 
