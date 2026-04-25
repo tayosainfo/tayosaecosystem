@@ -774,6 +774,30 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 	uid := authedUserID(r)
 	u, ok := activeStore.FindByUserID(uid)
 	if !ok {
+		// User authenticated with Supabase but no local profile yet
+		// This can happen if they logged in before completing registration
+		// Return minimal profile from Supabase token
+		token := bearerToken(r)
+		if token != "" && supabaseConfigured() {
+			sbUser, _, err := supabaseUserGet("/auth/v1/user", token)
+			if err == nil {
+				respond(w, http.StatusOK, map[string]any{
+					"user": map[string]any{
+						"id":                   mapGetString(sbUser, "id"),
+						"fullName":             mapGetString(sbUser, "user_metadata.name"),
+						"contactEmail":         mapGetString(sbUser, "email"),
+						"contactEmailVerified": mapGetString(sbUser, "email_confirmed_at") != "",
+						"createdAt":            mapGetString(sbUser, "created_at"),
+					},
+					"onboarding": map[string]any{
+						"phase": 0, // Not started
+					},
+					"requiresProfileCompletion": true,
+					"message":                   "Please complete your profile registration",
+				})
+				return
+			}
+		}
 		respond(w, http.StatusNotFound, map[string]any{"error": "user not found in platform store"})
 		return
 	}
