@@ -15,6 +15,7 @@ import Affiliate from './pages/Affiliate';
 import KibiinaSetup from './pages/KibiinaSetup';
 import Admin from './pages/Admin';
 import Users from './pages/admin/Users';
+import AdminDebug from './pages/AdminDebug';
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -60,6 +61,9 @@ const AppContent: React.FC = () => {
   }
   if (window.location.pathname.startsWith('/affiliate')) {
     return <Affiliate />;
+  }
+  if (window.location.pathname.startsWith('/admin/debug')) {
+    return <AdminDebug />;
   }
   if (window.location.pathname.startsWith('/admin/users')) {
     return <Users />;
