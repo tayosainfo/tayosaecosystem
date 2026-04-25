@@ -65,7 +65,16 @@ export default function AdminDebug() {
         addResult({ 
           step: '2', 
           status: 'error', 
-          message: 'User not found in users_identity table' 
+          message: '❌ User not found in users_identity table',
+          data: {
+            possibleCauses: [
+              '1. Email mismatch - Check if email in app matches database exactly',
+              '2. RLS Policy blocking - Row Level Security may be preventing access',
+              '3. User record missing - User may not exist in users_identity table'
+            ],
+            fix: 'Run: db/scripts/check_user_email.sql to verify user exists',
+            rls_fix: 'Run: db/migrations/015_fix_users_identity_rls.sql to fix RLS policies'
+          }
         });
       } else {
         addResult({ 
