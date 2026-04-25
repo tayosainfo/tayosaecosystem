@@ -24,8 +24,11 @@ func adminCheckStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Normalize email (lowercase)
+	normalizedEmail := strings.ToLower(strings.TrimSpace(req.Email))
+	
 	// Find user by email
-	user, ok := activeStore.FindByEmail(req.Email)
+	user, ok := activeStore.FindByEmailKey(normalizedEmail)
 	if !ok {
 		// User not found - return non-admin status
 		respond(w, http.StatusOK, map[string]any{
