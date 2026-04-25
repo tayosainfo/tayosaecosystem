@@ -1,19 +1,17 @@
-import { supabase } from '../lib/supabase';
-
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
 /**
  * Make an authenticated admin API request
- * Automatically includes JWT token and handles token refresh
+ * Automatically includes JWT token from sessionStorage
  */
 export async function makeAdminRequest(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<any> {
-  // Get current session
-  const { data: { session }, error } = await supabase.auth.getSession();
+  // Get JWT token from sessionStorage (custom auth, not Supabase Auth)
+  const token = sessionStorage.getItem('auth_token');
   
-  if (error || !session) {
+  if (!token) {
     throw new Error('Not authenticated');
   }
 
@@ -21,22 +19,11 @@ export async function makeAdminRequest(
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers: {
-      'Authorization': `Bearer ${session.access_token}`,
+      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
       ...options.headers,
     },
   });
-
-  // Handle token expiration
-  if (response.status === 401) {
-    // Try to refresh token
-    const { data: { session: newSession } } = await supabase.auth.refreshSession();
-    if (newSession) {
-      // Retry with new token
-      return makeAdminRequest(endpoint, options);
-    }
-    throw new Error('Authentication failed');
-  }
 
   // Handle authorization failure
   if (response.status === 403) {
@@ -59,28 +46,21 @@ export async function makeAuthenticatedRequest(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<any> {
-  const { data: { session }, error } = await supabase.auth.getSession();
+  // Get JWT token from sessionStorage (custom auth, not Supabase Auth)
+  const token = sessionStorage.getItem('auth_token');
   
-  if (error || !session) {
+  if (!token) {
     throw new Error('Not authenticated');
   }
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers: {
-      'Authorization': `Bearer ${session.access_token}`,
+      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
       ...options.headers,
     },
   });
-
-  if (response.status === 401) {
-    const { data: { session: newSession } } = await supabase.auth.refreshSession();
-    if (newSession) {
-      return makeAuthenticatedRequest(endpoint, options);
-    }
-    throw new Error('Authentication failed');
-  }
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
