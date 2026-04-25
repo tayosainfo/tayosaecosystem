@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Search, ChevronLeft, ChevronRight, User as UserIcon } from 'lucide-react';
 import { makeAdminRequest } from '../../utils/api';
-import { useNavigate } from 'react-router-dom';
 
 interface User {
   user_id: string;
@@ -24,7 +23,6 @@ interface UsersResponse {
 }
 
 const Users: React.FC = () => {
-  const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -85,7 +83,8 @@ const Users: React.FC = () => {
   };
 
   const handleUserClick = (userId: string) => {
-    navigate(`/admin/users/${userId}`);
+    // Navigate using window.location instead of React Router
+    window.location.href = `/admin/users/${userId}`;
   };
 
   const getStatusBadge = (status: string) => {
