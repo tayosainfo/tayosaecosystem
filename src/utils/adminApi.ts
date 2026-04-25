@@ -10,21 +10,32 @@ export interface AdminStatusResponse {
 }
 
 /**
- * Check if current user is admin by querying Supabase
+ * Check if current user is admin by querying Supabase directly
+ * (No backend endpoint - direct Supabase query)
  */
 export async function checkAdminStatusViaBackend(): Promise<AdminStatusResponse> {
   try {
     const userStr = sessionStorage.getItem('auth_user');
     
     if (!userStr) {
+      console.log('No auth_user in sessionStorage');
       return { isAdmin: false, role: 'user', email: '' };
     }
 
     const user = JSON.parse(userStr);
     const email = user.email;
 
+    if (!email) {
+      console.log('No email found in auth_user');
+      return { isAdmin: false, role: 'user', email: '' };
+    }
+
+    console.log('Checking admin status for email:', email);
+    
     // Query Supabase directly
-    return await checkAdminStatusDirect(email);
+    const result = await checkAdminStatusDirect(email);
+    console.log('Admin status result:', result);
+    return result;
   } catch (error) {
     console.error('Error checking admin status:', error);
     return { isAdmin: false, role: 'user', email: '' };

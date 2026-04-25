@@ -38,14 +38,27 @@ export function useAdminStatus() {
 
   useEffect(() => {
     // Check admin status on mount and when user changes
-    if (user) {
-      checkAdminStatus().then(status => {
-        setAdminStatus(status);
+    const checkStatus = async () => {
+      setLoading(true);
+      try {
+        if (user) {
+          console.log('useAdminStatus: Checking admin status for user:', user.email);
+          const status = await checkAdminStatus();
+          console.log('useAdminStatus: Admin status result:', status);
+          setAdminStatus(status);
+        } else {
+          console.log('useAdminStatus: No user found');
+          setAdminStatus({ isAdmin: false, role: 'user' });
+        }
+      } catch (error) {
+        console.error('useAdminStatus: Error checking admin status:', error);
+        setAdminStatus({ isAdmin: false, role: 'user' });
+      } finally {
         setLoading(false);
-      });
-    } else {
-      setLoading(false);
-    }
+      }
+    };
+
+    checkStatus();
   }, [user]);
 
   return { ...adminStatus, loading };
