@@ -47,7 +47,8 @@ func (s *PostgresStore) FindByPhone(phoneE164 string) (User, bool) {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, `
 SELECT user_id, full_name, phone_e164, auth_email, contact_email, supabase_user_id, COALESCE(supabase_login_email,''),
-password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality
+password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality,
+COALESCE(role, 'user'), COALESCE(status, 'active'), role_assigned_at, role_assigned_by, last_login
 FROM users_identity WHERE phone_e164 = $1`, phoneE164)
 	u, err := scanUser(row)
 	if err != nil {
@@ -60,7 +61,8 @@ func (s *PostgresStore) FindByEmailKey(normalizedEmail string) (User, bool) {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, `
 SELECT user_id, full_name, phone_e164, auth_email, contact_email, supabase_user_id, COALESCE(supabase_login_email,''),
-password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality
+password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality,
+COALESCE(role, 'user'), COALESCE(status, 'active'), role_assigned_at, role_assigned_by, last_login
 FROM users_identity
 WHERE LOWER(TRIM(contact_email)) = LOWER(TRIM($1))
    OR LOWER(TRIM(auth_email)) = LOWER(TRIM($1))
@@ -77,7 +79,8 @@ func (s *PostgresStore) FindByUserID(userID string) (User, bool) {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, `
 SELECT user_id, full_name, phone_e164, auth_email, contact_email, supabase_user_id, COALESCE(supabase_login_email,''),
-password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality
+password_hash, phone_verified_at, contact_email_verified_at, created_at, date_of_birth, nationality,
+COALESCE(role, 'user'), COALESCE(status, 'active'), role_assigned_at, role_assigned_by, last_login
 FROM users_identity WHERE user_id = $1`, userID)
 	u, err := scanUser(row)
 	if err != nil {
@@ -95,8 +98,12 @@ func scanUser(row pgx.Row) (User, error) {
 	var created time.Time
 	var dob *time.Time
 	var nat *string
+	var role, status string
+	var roleAssignedAt, lastLogin *time.Time
+	var roleAssignedBy *string
+	
 	err := row.Scan(&u.ID, &u.FullName, &u.PhoneE164, &u.AuthEmail, &contact, &supabaseID, &supabaseLogin,
-		&pwdHash, &phoneV, &emailV, &created, &dob, &nat)
+		&pwdHash, &phoneV, &emailV, &created, &dob, &nat, &role, &status, &roleAssignedAt, &roleAssignedBy, &lastLogin)
 	if err != nil {
 		return User{}, err
 	}
@@ -122,6 +129,13 @@ func scanUser(row pgx.Row) (User, error) {
 	if nat != nil {
 		u.Nationality = *nat
 	}
+	u.Role = role
+	u.Status = status
+	u.RoleAssignedAt = roleAssignedAt
+	if roleAssignedBy != nil {
+		u.RoleAssignedBy = *roleAssignedBy
+	}
+	u.LastLogin = lastLogin
 	return u, nil
 }
 
