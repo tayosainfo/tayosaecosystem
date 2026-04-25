@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../hooks/useAuth';
 
 export interface UserRole {
   isAdmin: boolean;
@@ -8,18 +9,36 @@ export interface UserRole {
 
 /**
  * Check if current user has admin role
- * Extracts role from JWT token claims
+ * Extracts role from database based on app user email
  */
 export async function checkAdminStatus(): Promise<UserRole> {
   try {
-    const { data: { user }, error } = await supabase.auth.getUser();
-    
-    if (error || !user) {
+    // Get the current user from app context
+    const authToken = sessionStorage.getItem('auth_user');
+    if (!authToken) {
       return { isAdmin: false, role: 'user' };
     }
 
-    // Extract role from app_metadata (set by Supabase custom claims hook)
-    const userRole = user.app_metadata?.user_role || 'user';
+    const user = JSON.parse(authToken);
+    const userEmail = user.email;
+
+    if (!userEmail) {
+      return { isAdmin: false, role: 'user' };
+    }
+
+    // Query database for user role
+    const { data, error } = await supabase
+      .from('users_identity')
+      .select('role')
+      .eq('auth_email', userEmail)
+      .single();
+
+    if (error || !data) {
+      console.error('Failed to fetch user role:', error);
+      return { isAdmin: false, role: 'user' };
+    }
+
+    const userRole = data.role || 'user';
     
     return {
       isAdmin: userRole === 'admin',
@@ -41,21 +60,19 @@ export function useAdminStatus() {
     role: 'user'
   });
   const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
 
   useEffect(() => {
-    // Check admin status on mount
-    checkAdminStatus().then(status => {
-      setAdminStatus(status);
+    // Check admin status on mount and when user changes
+    if (user) {
+      checkAdminStatus().then(status => {
+        setAdminStatus(status);
+        setLoading(false);
+      });
+    } else {
       setLoading(false);
-    });
-
-    // Listen for auth state changes and update admin status
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
-      checkAdminStatus().then(setAdminStatus);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
+    }
+  }, [user]);
 
   return { ...adminStatus, loading };
 }

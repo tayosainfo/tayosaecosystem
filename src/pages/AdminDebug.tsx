@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../hooks/useAuth';
 
 interface DiagnosticResult {
   step: string;
@@ -11,6 +12,7 @@ interface DiagnosticResult {
 export default function AdminDebug() {
   const [results, setResults] = useState<DiagnosticResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const { user: appUser, isAuthenticated } = useAuth();
 
   const addResult = (result: DiagnosticResult) => {
     setResults(prev => [...prev, result]);
@@ -21,16 +23,15 @@ export default function AdminDebug() {
     setLoading(true);
 
     try {
-      // Step 1: Check if user is logged in
-      addResult({ step: '1', status: 'info', message: 'Checking authentication status...' });
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      // Step 1: Check if user is logged in via app auth
+      addResult({ step: '1', status: 'info', message: 'Checking application authentication status...' });
       
-      if (userError || !user) {
+      if (!isAuthenticated || !appUser) {
         addResult({ 
           step: '1', 
           status: 'error', 
-          message: 'Not logged in or session expired',
-          data: userError 
+          message: 'Not logged in via application auth',
+          data: { isAuthenticated, user: appUser }
         });
         setLoading(false);
         return;
@@ -39,101 +40,64 @@ export default function AdminDebug() {
       addResult({ 
         step: '1', 
         status: 'success', 
-        message: `Logged in as: ${user.email}`,
-        data: { userId: user.id, email: user.email }
+        message: `Logged in as: ${appUser.email}`,
+        data: { userId: appUser.id, email: appUser.email }
       });
 
-      // Step 2: Check JWT token claims
-      addResult({ step: '2', status: 'info', message: 'Checking JWT token claims...' });
-      const { data: { session } } = await supabase.auth.getSession();
+      // Step 2: Check database role
+      addResult({ step: '2', status: 'info', message: 'Checking database role...' });
       
-      if (!session) {
-        addResult({ step: '2', status: 'error', message: 'No active session' });
-        setLoading(false);
-        return;
-      }
-
-      // Decode JWT
-      const token = session.access_token;
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      const userRole = payload.app_metadata?.user_role || payload.user_role || 'NOT SET';
-
-      addResult({ 
-        step: '2', 
-        status: userRole === 'admin' ? 'success' : 'warning', 
-        message: `JWT token role: ${userRole}`,
-        data: { 
-          app_metadata: payload.app_metadata,
-          user_role: userRole,
-          expires: new Date(payload.exp * 1000).toLocaleString()
-        }
-      });
-
-      // Step 3: Check database role
-      addResult({ step: '3', status: 'info', message: 'Checking database role...' });
-      
-      // Query users_identity table
+      // Query users_identity table using app user email
       const { data: userData, error: dbError } = await supabase
         .from('users_identity')
         .select('user_id, full_name, auth_email, role, supabase_user_id, status')
-        .eq('auth_email', user.email)
+        .eq('auth_email', appUser.email)
         .single();
 
       if (dbError) {
         addResult({ 
-          step: '3', 
+          step: '2', 
           status: 'error', 
           message: 'Failed to query database',
           data: dbError 
         });
       } else if (!userData) {
         addResult({ 
-          step: '3', 
+          step: '2', 
           status: 'error', 
           message: 'User not found in users_identity table' 
         });
       } else {
         addResult({ 
-          step: '3', 
+          step: '2', 
           status: userData.role === 'admin' ? 'success' : 'warning', 
           message: `Database role: ${userData.role}`,
           data: userData
         });
 
-        // Step 4: Check supabase_user_id linkage
-        addResult({ step: '4', status: 'info', message: 'Checking Supabase user ID linkage...' });
+        // Step 3: Check supabase_user_id linkage
+        addResult({ step: '3', status: 'info', message: 'Checking Supabase user ID linkage...' });
         
         if (!userData.supabase_user_id) {
           addResult({ 
-            step: '4', 
-            status: 'error', 
-            message: '❌ supabase_user_id is NULL - This is the problem!',
+            step: '3', 
+            status: 'warning', 
+            message: '⚠️ supabase_user_id is NULL (may not be needed for custom auth)',
             data: { 
-              fix: 'Run: UPDATE users_identity SET supabase_user_id = \'' + user.id + '\' WHERE auth_email = \'' + user.email + '\';'
-            }
-          });
-        } else if (userData.supabase_user_id !== user.id) {
-          addResult({ 
-            step: '4', 
-            status: 'error', 
-            message: '❌ supabase_user_id mismatch',
-            data: { 
-              expected: user.id,
-              actual: userData.supabase_user_id,
-              fix: 'Run: UPDATE users_identity SET supabase_user_id = \'' + user.id + '\' WHERE auth_email = \'' + user.email + '\';'
+              note: 'Your app uses custom authentication, not Supabase Auth directly'
             }
           });
         } else {
           addResult({ 
-            step: '4', 
+            step: '3', 
             status: 'success', 
-            message: '✅ supabase_user_id correctly linked' 
+            message: '✅ supabase_user_id is set' 
           });
         }
       }
 
-      // Step 5: Summary
-      addResult({ step: '5', status: 'info', message: 'Diagnosis complete' });
+      // Step 4: Summary
+      addResult({ step: '4', status: 'info', message: 'Diagnosis complete' });
 
     } catch (error) {
       addResult({ 
@@ -147,45 +111,42 @@ export default function AdminDebug() {
     }
   };
 
-  const forceRefresh = async () => {
+  const checkAdminStatus = async () => {
     try {
-      addResult({ step: 'REFRESH', status: 'info', message: 'Forcing token refresh...' });
-      const { data, error } = await supabase.auth.refreshSession();
+      addResult({ step: 'CHECK', status: 'info', message: 'Checking admin status...' });
       
-      if (error) {
-        addResult({ step: 'REFRESH', status: 'error', message: 'Token refresh failed', data: error });
+      if (!appUser) {
+        addResult({ step: 'CHECK', status: 'error', message: 'No user logged in' });
         return;
       }
 
-      if (data.session) {
-        const token = data.session.access_token;
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        const userRole = payload.app_metadata?.user_role || 'NOT SET';
-        
-        addResult({ 
-          step: 'REFRESH', 
-          status: 'success', 
-          message: `Token refreshed. New role: ${userRole}`,
-          data: { user_role: userRole }
-        });
+      const { data: userData, error } = await supabase
+        .from('users_identity')
+        .select('role')
+        .eq('auth_email', appUser.email)
+        .single();
 
-        if (userRole === 'admin') {
-          addResult({ 
-            step: 'REFRESH', 
-            status: 'success', 
-            message: '✅ Admin access should now work! Reloading page...' 
-          });
-          setTimeout(() => window.location.reload(), 2000);
-        } else {
-          addResult({ 
-            step: 'REFRESH', 
-            status: 'warning', 
-            message: '⚠️ Token refreshed but role is still not admin. Check database linkage.' 
-          });
-        }
+      if (error) {
+        addResult({ step: 'CHECK', status: 'error', message: 'Failed to check role', data: error });
+        return;
+      }
+
+      if (userData?.role === 'admin') {
+        addResult({ 
+          step: 'CHECK', 
+          status: 'success', 
+          message: '✅ User IS an admin! Redirecting to admin dashboard...' 
+        });
+        setTimeout(() => window.location.href = '/admin', 2000);
+      } else {
+        addResult({ 
+          step: 'CHECK', 
+          status: 'error', 
+          message: `❌ User role is '${userData?.role}', not 'admin'` 
+        });
       }
     } catch (error) {
-      addResult({ step: 'REFRESH', status: 'error', message: 'Refresh error', data: error });
+      addResult({ step: 'CHECK', status: 'error', message: 'Error checking admin status', data: error });
     }
   };
 
@@ -211,11 +172,11 @@ export default function AdminDebug() {
               {loading ? 'Running...' : 'Run Diagnostics'}
             </button>
             <button
-              onClick={forceRefresh}
+              onClick={checkAdminStatus}
               disabled={loading}
               className="px-6 py-3 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 disabled:opacity-50"
             >
-              Force Token Refresh
+              Check Admin Status
             </button>
           </div>
 
@@ -250,23 +211,26 @@ export default function AdminDebug() {
           <h2 className="text-xl font-bold text-white mb-4">Common Issues & Fixes</h2>
           <div className="space-y-4 text-white">
             <div>
-              <h3 className="font-semibold text-yellow-300">Issue: supabase_user_id is NULL</h3>
+              <h3 className="font-semibold text-yellow-300">Issue: User role is 'user' but should be 'admin'</h3>
               <p className="text-sm text-blue-200 mt-1">
-                The users_identity record is not linked to the Supabase Auth user.
-                Run the SQL fix shown in Step 4 above.
+                The user record in the database doesn't have the admin role assigned.
+                Check your database to ensure the role field is set to 'admin' for this user.
               </p>
             </div>
             <div>
-              <h3 className="font-semibold text-yellow-300">Issue: JWT role is 'user' but database role is 'admin'</h3>
+              <h3 className="font-semibold text-yellow-300">Issue: User not found in users_identity table</h3>
               <p className="text-sm text-blue-200 mt-1">
-                Token was issued before role was assigned. Click "Force Token Refresh" button above.
+                The user's email doesn't match between the application auth and the users_identity table.
+                Verify the email is exactly the same in both places.
               </p>
             </div>
             <div>
-              <h3 className="font-semibold text-yellow-300">Issue: Custom claims hook not configured</h3>
+              <h3 className="font-semibold text-yellow-300">How to fix admin access</h3>
               <p className="text-sm text-blue-200 mt-1">
-                Go to Supabase Dashboard → Authentication → Hooks → Enable "Custom Access Token" hook
-                → Set function to: public.custom_access_token_hook
+                1. Run diagnostics to see the current role<br/>
+                2. If role is 'user', update it to 'admin' in the database<br/>
+                3. Click "Check Admin Status" to verify<br/>
+                4. Navigate to /admin to access the dashboard
               </p>
             </div>
           </div>
