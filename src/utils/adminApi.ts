@@ -1,9 +1,7 @@
 /**
  * Admin API utilities
- * These functions check admin status from the app's stored user data
+ * Checks admin status by querying Supabase directly
  */
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
 export interface AdminStatusResponse {
   isAdmin: boolean;
@@ -12,45 +10,20 @@ export interface AdminStatusResponse {
 }
 
 /**
- * Check if current user is admin by calling backend endpoint
- * Falls back to checking database directly if backend endpoint fails
+ * Check if current user is admin by querying Supabase
  */
 export async function checkAdminStatusViaBackend(): Promise<AdminStatusResponse> {
   try {
-    const authToken = sessionStorage.getItem('auth_token');
     const userStr = sessionStorage.getItem('auth_user');
     
-    if (!authToken || !userStr) {
+    if (!userStr) {
       return { isAdmin: false, role: 'user', email: '' };
     }
 
     const user = JSON.parse(userStr);
     const email = user.email;
 
-    // Try calling backend endpoint first
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/admin/check-status`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return {
-          isAdmin: data.role === 'admin',
-          role: data.role || 'user',
-          email: data.email || email,
-        };
-      }
-    } catch (error) {
-      console.warn('Backend endpoint not available, trying direct database query:', error);
-    }
-
-    // Fallback: Query database directly via Supabase
+    // Query Supabase directly
     return await checkAdminStatusDirect(email);
   } catch (error) {
     console.error('Error checking admin status:', error);
@@ -59,13 +32,14 @@ export async function checkAdminStatusViaBackend(): Promise<AdminStatusResponse>
 }
 
 /**
- * Direct database query for admin status
- * This queries Supabase directly as a fallback
+ * Direct database query for admin status via Supabase
  */
 export async function checkAdminStatusDirect(email: string): Promise<AdminStatusResponse> {
   try {
     // Import Supabase client
     const { supabase } = await import('../lib/supabase');
+    
+    console.log('Querying Supabase for admin status:', email);
     
     // Query database for user role
     const { data, error } = await supabase
@@ -75,14 +49,17 @@ export async function checkAdminStatusDirect(email: string): Promise<AdminStatus
       .single();
 
     if (error) {
-      console.error('Failed to query database:', error);
+      console.error('Supabase query error:', error);
       return { isAdmin: false, role: 'user', email };
     }
 
     if (!data) {
+      console.log('User not found in database');
       return { isAdmin: false, role: 'user', email };
     }
 
+    console.log('User found with role:', data.role);
+    
     return {
       isAdmin: data.role === 'admin',
       role: data.role || 'user',
